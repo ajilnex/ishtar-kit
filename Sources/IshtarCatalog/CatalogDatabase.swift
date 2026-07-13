@@ -1,0 +1,121 @@
+import Foundation
+import GRDB
+
+/// La base de catalogue d'une bibliothèque Ishtar.
+///
+/// Un fichier SQLite par bibliothèque, stocké hors du dossier source de l'utilisateur
+/// (le dossier source est en lecture seule — invariant n° 2).
+public final class CatalogDatabase: Sendable {
+    public let pool: DatabasePool
+
+    public init(at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        pool = try DatabasePool(path: url.path)
+        try Self.migrator.migrate(pool)
+    }
+
+    /// Base en mémoire, pour les tests.
+    public init(inMemory _: Void) throws {
+        // DatabasePool exige un fichier ; DatabaseQueue suffirait mais on garde
+        // un seul type de connexion. Un fichier temporaire fait l'affaire.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-test-\(UUID().uuidString).sqlite")
+        pool = try DatabasePool(path: tmp.path)
+        try Self.migrator.migrate(pool)
+    }
+
+    static var migrator: DatabaseMigrator {
+        var migrator = DatabaseMigrator()
+
+        migrator.registerMigration("v1_ontologie") { db in
+            try db.create(table: "creator") { t in
+                t.column("id", .text).primaryKey()
+                t.column("name", .text).notNull()
+                t.column("sortName", .text)
+            }
+
+            try db.create(table: "work") { t in
+                t.column("id", .text).primaryKey()
+                t.column("title", .text).notNull()
+                t.column("subtitle", .text)
+                t.column("originalLanguage", .text)
+                t.column("date", .text)
+                t.column("discipline", .text)
+                t.column("notes", .text)
+                t.column("curationStatus", .text).notNull()
+                t.column("confidence", .text).notNull()
+            }
+
+            try db.create(table: "work_creator") { t in
+                t.column("workId", .text).notNull().references("work", onDelete: .cascade)
+                t.column("creatorId", .text).notNull().references("creator", onDelete: .cascade)
+                t.column("role", .text).notNull()
+                t.column("position", .integer).notNull().defaults(to: 0)
+                t.primaryKey(["workId", "creatorId", "role"])
+            }
+
+            try db.create(table: "edition") { t in
+                t.column("id", .text).primaryKey()
+                t.column("workId", .text).notNull().references("work", onDelete: .cascade)
+                t.column("title", .text)
+                t.column("publisher", .text)
+                t.column("year", .text)
+                t.column("language", .text)
+                t.column("isbn13", .text)
+                t.column("doi", .text)
+                t.column("curationStatus", .text).notNull()
+                t.column("confidence", .text).notNull()
+            }
+
+            try db.create(table: "edition_creator") { t in
+                t.column("editionId", .text).notNull().references("edition", onDelete: .cascade)
+                t.column("creatorId", .text).notNull().references("creator", onDelete: .cascade)
+                t.column("role", .text).notNull()
+                t.column("position", .integer).notNull().defaults(to: 0)
+                t.primaryKey(["editionId", "creatorId", "role"])
+            }
+
+            try db.create(table: "document") { t in
+                t.column("id", .text).primaryKey()
+                t.column("editionId", .text).references("edition", onDelete: .setNull)
+                t.column("filePath", .text).notNull().unique()
+                t.column("originalFileName", .text).notNull()
+                t.column("fileSize", .integer).notNull()
+                t.column("contentHash", .text).indexed()
+                t.column("format", .text).notNull()
+                t.column("dateAdded", .datetime).notNull()
+                t.column("needsOCR", .boolean).notNull().defaults(to: false)
+                t.column("isTextExtracted", .boolean).notNull().defaults(to: false)
+                t.column("curationStatus", .text).notNull()
+                t.column("confidence", .text).notNull()
+            }
+
+            try db.create(table: "collection") { t in
+                t.column("id", .text).primaryKey()
+                t.column("name", .text).notNull()
+                t.column("parentId", .text).references("collection", onDelete: .cascade)
+                t.column("sourceFolderPath", .text)
+            }
+
+            try db.create(table: "collection_item") { t in
+                t.column("collectionId", .text).notNull().references("collection", onDelete: .cascade)
+                t.column("workId", .text).notNull().references("work", onDelete: .cascade)
+                t.primaryKey(["collectionId", "workId"])
+            }
+
+            try db.create(table: "source_folder") { t in
+                t.column("id", .text).primaryKey()
+                t.column("path", .text).notNull().unique()
+                t.column("dateAdded", .datetime).notNull()
+            }
+        }
+
+        // Les migrations suivantes (FTS5 plein texte, embeddings, annotations, liens,
+        // artéfacts, conversations du démon) arrivent avec les jalons M1–M3.
+
+        return migrator
+    }
+}
