@@ -71,21 +71,43 @@ public struct Ingestor: Sendable {
                     continue
                 }
 
-                let guess = FilenameParser.parse(fileName: file.fileName)
+                // Entonnoir : étage 1 (nom de fichier), puis étage 2 (métadonnées
+                // embarquées) si le nom n'a rien donné. Local, sans réseau.
+                var guess = FilenameParser.parse(fileName: file.fileName)
+                if guess.confidence == .fallback,
+                   let embedded = EmbeddedMetadata.read(
+                       fileURL: URL(fileURLWithPath: file.path),
+                       format: file.format
+                   )
+                {
+                    if embedded.title.isEmpty {
+                        // Pas de titre embarqué : on garde le titre de repli du nom
+                        // de fichier, mais on récupère ISBN/DOI/auteur trouvés.
+                        var merged = embedded
+                        merged.title = guess.title
+                        merged.confidence = .fallback
+                        guess = merged
+                    } else {
+                        guess = embedded
+                    }
+                }
+
                 let isDuplicate = duplicatePaths.contains(file.path)
+                // Un étage n'emporte la reconnaissance que s'il fournit titre ET auteur.
+                let isSolid = guess.confidence == .structured && guess.author != nil
 
                 let status: CurationStatus
                 let confidence: Confidence
-                switch (isDuplicate, guess.confidence) {
+                switch (isDuplicate, isSolid) {
                 case (true, _):
                     status = .duplicateCandidate
                     confidence = .low
                     result.duplicates += 1
-                case (false, .structured):
+                case (false, true):
                     status = .recognized
                     confidence = .probable
                     result.recognized += 1
-                case (false, .fallback):
+                case (false, false):
                     status = .needsReview
                     confidence = .low
                     result.needsReview += 1
@@ -102,8 +124,11 @@ public struct Ingestor: Sendable {
 
                 let edition = Edition(
                     workId: work.id,
+                    publisher: guess.publisher,
                     year: guess.year,
+                    language: guess.language,
                     isbn13: guess.isbn13,
+                    doi: guess.doi,
                     curationStatus: status,
                     confidence: confidence
                 )

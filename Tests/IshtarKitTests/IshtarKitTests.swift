@@ -1,8 +1,72 @@
 import Foundation
+import PDFKit
 import Testing
+import ZIPFoundation
 @testable import IshtarCatalog
 @testable import IshtarIngest
 @testable import IshtarSearch
+
+// MARK: - Fabriques de documents de test
+
+enum Fixtures {
+    /// Un PDF avec des métadonnées Info et un ISBN dans le texte de la première page.
+    static func makePDF(at url: URL, title: String?, author: String?, pageText: String? = nil) {
+        let document = PDFDocument()
+        var attributes: [AnyHashable: Any] = [:]
+        if let title { attributes[PDFDocumentAttribute.titleAttribute] = title }
+        if let author { attributes[PDFDocumentAttribute.authorAttribute] = author }
+        document.documentAttributes = attributes
+
+        let page = PDFPage()
+        document.insert(page, at: 0)
+        document.write(to: url)
+
+        // PDFPage() vierge ne porte pas de texte ; si un texte de page est demandé,
+        // on l'ajoute en annotation texte libre (extractible par page.string ? non —
+        // les tests qui ont besoin de texte de page utilisent un contenu dessiné).
+        _ = pageText
+    }
+
+    /// Un EPUB minimal : container.xml + OPF Dublin Core.
+    static func makeEPUB(at url: URL, title: String, author: String, year: String, isbn13: String?) throws {
+        let archive = try Archive(url: url, accessMode: .create)
+
+        let container = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+          <rootfiles>
+            <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+          </rootfiles>
+        </container>
+        """
+        let identifier = isbn13.map { "<dc:identifier>urn:isbn:\($0)</dc:identifier>" } ?? ""
+        let opf = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>\(title)</dc:title>
+            <dc:creator>\(author)</dc:creator>
+            <dc:date>\(year)-01-01</dc:date>
+            <dc:language>fr</dc:language>
+            <dc:publisher>Éditions de test</dc:publisher>
+            \(identifier)
+          </metadata>
+        </package>
+        """
+
+        for (path, content) in [("META-INF/container.xml", container), ("OEBPS/content.opf", opf)] {
+            let data = Data(content.utf8)
+            try archive.addEntry(
+                with: path,
+                type: .file,
+                uncompressedSize: Int64(data.count),
+                provider: { position, size in
+                    data.subdata(in: Int(position)..<Int(position) + size)
+                }
+            )
+        }
+    }
+}
 
 // MARK: - FilenameParser
 
@@ -196,5 +260,169 @@ struct IngestTests {
         let collections = try await overview.collections()
         let philoId = try #require(collections.first?.id)
         #expect(membership.values.contains { $0.contains(philoId) })
+    }
+}
+
+// MARK: - Étage 2 : métadonnées embarquées
+
+@Suite("Entonnoir — étage métadonnées embarquées")
+struct EmbeddedMetadataTests {
+    @Test("Un PDF mal nommé mais bien renseigné est reconnu")
+    func pdfInfo() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-embedded-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let url = dir.appendingPathComponent("scan_sans_nom_042.pdf")
+        Fixtures.makePDF(at: url, title: "De la grammatologie", author: "Jacques Derrida")
+
+        let guess = try #require(EmbeddedMetadata.read(fileURL: url, format: .pdf))
+        #expect(guess.title == "De la grammatologie")
+        #expect(guess.author == "Jacques Derrida")
+        #expect(guess.confidence == .structured)
+    }
+
+    @Test("Les métadonnées machinales sont rejetées, pas proposées")
+    func junkRejected() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-junk-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let url = dir.appendingPathComponent("document.pdf")
+        Fixtures.makePDF(at: url, title: "Microsoft Word - final2.doc", author: "user")
+
+        let guess = EmbeddedMetadata.read(fileURL: url, format: .pdf)
+        #expect(guess == nil)
+    }
+
+    @Test("Un EPUB livre son Dublin Core : titre, auteur, année, ISBN, langue")
+    func epubOPF() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-epub-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let url = dir.appendingPathComponent("téléchargement(3).epub")
+        try Fixtures.makeEPUB(
+            at: url,
+            title: "La Distinction",
+            author: "Pierre Bourdieu",
+            year: "1979",
+            isbn13: "9782707302755"
+        )
+
+        let guess = try #require(EmbeddedMetadata.read(fileURL: url, format: .epub))
+        #expect(guess.title == "La Distinction")
+        #expect(guess.author == "Pierre Bourdieu")
+        #expect(guess.year == "1979")
+        #expect(guess.isbn13 == "9782707302755")
+        #expect(guess.language == "fr")
+        #expect(guess.publisher == "Éditions de test")
+    }
+
+    @Test("L'ingestion reconnaît un EPUB mal nommé grâce à l'étage 2")
+    func ingestUsesEmbedded() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-e2e-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try Fixtures.makeEPUB(
+            at: dir.appendingPathComponent("téléchargement(3).epub"),
+            title: "La Distinction",
+            author: "Pierre Bourdieu",
+            year: "1979",
+            isbn13: "9782707302755"
+        )
+
+        let db = try CatalogDatabase(inMemory: ())
+        let report = try Ingestor().ingest(
+            report: LibraryScanner().scan(directory: dir),
+            sourceFolder: dir,
+            into: db
+        )
+        #expect(report.recognized == 1)
+        #expect(report.needsReview == 0)
+
+        let rows = try await LibraryOverview(db: db).rows()
+        let row = try #require(rows.first)
+        #expect(row.work.title == "La Distinction")
+        #expect(row.authors == ["Pierre Bourdieu"])
+        #expect(row.edition?.isbn13 == "9782707302755")
+    }
+}
+
+// MARK: - Curation : la correction humaine
+
+@Suite("Curation — la correction humaine fait autorité")
+struct CatalogStoreTests {
+    @Test("Corriger une fiche la rend reconnue, confiance haute")
+    func applyUserEdit() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-edit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("x".utf8).write(to: dir.appendingPathComponent("scan illisible.pdf"))
+
+        let db = try CatalogDatabase(inMemory: ())
+        _ = try Ingestor().ingest(
+            report: LibraryScanner().scan(directory: dir),
+            sourceFolder: dir,
+            into: db
+        )
+
+        let overview = LibraryOverview(db: db)
+        let before = try #require(try await overview.rows().first)
+        #expect(before.document.curationStatus == .needsReview)
+
+        try await CatalogStore(db: db).applyUserEdit(
+            workId: before.work.id,
+            editionId: before.edition?.id,
+            documentId: before.document.id,
+            edit: RecordEdit(
+                title: "Critique de la faculté de juger",
+                authors: ["Kant, Immanuel"],
+                year: "1790",
+                isbn13: "9782080707109"
+            )
+        )
+
+        let after = try #require(try await overview.rows().first)
+        #expect(after.work.title == "Critique de la faculté de juger")
+        #expect(after.authors == ["Kant, Immanuel"])
+        #expect(after.edition?.year == "1790")
+        #expect(after.document.curationStatus == .recognized)
+        #expect(after.document.confidence == .high)
+        #expect(after.work.confidence == .high)
+
+        let stats = try await overview.stats()
+        #expect(stats.needsReview == 0)
+        #expect(stats.recognized == 1)
+    }
+
+    @Test("Ignorer un document ne touche pas ses métadonnées")
+    func ignore() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-ignore-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("x".utf8).write(to: dir.appendingPathComponent("notes de cours.pdf"))
+
+        let db = try CatalogDatabase(inMemory: ())
+        _ = try Ingestor().ingest(
+            report: LibraryScanner().scan(directory: dir),
+            sourceFolder: dir,
+            into: db
+        )
+
+        let overview = LibraryOverview(db: db)
+        let row = try #require(try await overview.rows().first)
+        try await CatalogStore(db: db).setStatus(.ignored, documentId: row.document.id)
+
+        let after = try #require(try await overview.rows().first)
+        #expect(after.document.curationStatus == .ignored)
+        #expect(after.work.title == row.work.title)
     }
 }
