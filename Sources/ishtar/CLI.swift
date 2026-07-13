@@ -77,7 +77,10 @@ struct Ingest: AsyncParsableCommand {
 
         print("Catalogue : \(db.path)")
         print(String(repeating: "─", count: 60))
-        print("Documents ingérés   \(report.total)")
+        print("Documents scannés   \(report.scanned)")
+        print("  ajoutés           \(report.added)")
+        print("  conservés         \(report.kept)")
+        print("  retirés           \(report.removed)")
         print("  reconnus          \(report.recognized)")
         print("  à identifier      \(report.needsReview)")
         print("  doublons          \(report.duplicates)")

@@ -116,7 +116,8 @@ struct IngestTests {
         let scanReport = LibraryScanner().scan(directory: root)
         let report = try Ingestor().ingest(report: scanReport, sourceFolder: root, into: db)
 
-        #expect(report.total == 3)
+        #expect(report.scanned == 3)
+        #expect(report.added == 3)
         #expect(report.recognized == 1)
         #expect(report.needsReview == 1)
         #expect(report.duplicates == 1)
@@ -133,5 +134,67 @@ struct IngestTests {
 
         let collections = try await db.pool.read { try BookCollection.fetchAll($0) }
         #expect(collections.map(\.name) == ["Philosophie allemande"])
+    }
+
+    @Test("Ré-ingérer est idempotent ; les fichiers disparus sortent avec leurs orphelins")
+    func reingestAndRemoval() async throws {
+        let root = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let db = try CatalogDatabase(inMemory: ())
+        let ingestor = Ingestor()
+        let scanner = LibraryScanner()
+
+        _ = try ingestor.ingest(report: scanner.scan(directory: root), sourceFolder: root, into: db)
+
+        // Deuxième passage : rien ne bouge, rien ne se duplique.
+        let second = try ingestor.ingest(report: scanner.scan(directory: root), sourceFolder: root, into: db)
+        #expect(second.added == 0)
+        #expect(second.kept == 3)
+        #expect(second.removed == 0)
+
+        let countAfterSecond = try await db.pool.read { try Work.fetchCount($0) }
+        #expect(countAfterSecond == 3)
+
+        // Un fichier disparaît : son document, son édition et son œuvre aussi.
+        try FileManager.default.removeItem(at: root.appendingPathComponent("Kant_1781_Critique.pdf"))
+        let third = try ingestor.ingest(report: scanner.scan(directory: root), sourceFolder: root, into: db)
+        #expect(third.removed == 1)
+        #expect(third.kept == 2)
+
+        let works = try await db.pool.read { try Work.fetchCount($0) }
+        let editions = try await db.pool.read { try Edition.fetchCount($0) }
+        let documents = try await db.pool.read { try Document.fetchCount($0) }
+        #expect(works == 2)
+        #expect(editions == 2)
+        #expect(documents == 2)
+    }
+
+    @Test("LibraryOverview assemble lignes, statistiques et appartenances")
+    func overview() async throws {
+        let root = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let db = try CatalogDatabase(inMemory: ())
+        _ = try Ingestor().ingest(report: LibraryScanner().scan(directory: root), sourceFolder: root, into: db)
+
+        let overview = LibraryOverview(db: db)
+        let rows = try await overview.rows()
+        #expect(rows.count == 3)
+
+        let kant = try #require(rows.first { $0.work.title.contains("Critique") })
+        #expect(kant.authors == ["Kant"])
+        #expect(kant.edition?.year == "1781")
+
+        let stats = try await overview.stats()
+        #expect(stats.total == 3)
+        #expect(stats.recognized == 1)
+        #expect(stats.needsReview == 1)
+        #expect(stats.duplicates == 1)
+
+        let membership = try await overview.membership()
+        let collections = try await overview.collections()
+        let philoId = try #require(collections.first?.id)
+        #expect(membership.values.contains { $0.contains(philoId) })
     }
 }

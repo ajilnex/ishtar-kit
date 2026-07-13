@@ -2,40 +2,75 @@ import Foundation
 import GRDB
 import IshtarCatalog
 
-/// Résultat d'une ingestion : ce qui a été créé dans le catalogue, et le bilan chiffré.
-public struct IngestReport: Sendable {
-    public var total = 0
+/// Bilan d'une ingestion.
+public struct IngestReport: Sendable, Equatable {
+    /// Documents vus par le scan.
+    public var scanned = 0
+    /// Nouveaux documents entrés au catalogue.
+    public var added = 0
+    /// Documents déjà connus, conservés tels quels.
+    public var kept = 0
+    /// Documents disparus du dossier, retirés du catalogue.
+    public var removed = 0
+    /// Parmi les ajoutés : reconnus / à identifier / doublons.
     public var recognized = 0
     public var needsReview = 0
     public var duplicates = 0
     public var unsupported = 0
     public var collectionsCreated = 0
+
+    public init() {}
 }
 
 /// Transforme un rapport de scan en enregistrements du catalogue.
 ///
+/// **Idempotent** : ré-ingérer le même dossier ne crée rien de nouveau.
+/// Les documents sont identifiés par leur chemin ; les nouveaux entrent,
+/// les disparus sortent (avec ramasse-miettes des éditions et œuvres orphelines),
+/// les connus sont conservés — y compris les corrections faites par l'utilisateur.
+///
 /// Étage mécanique de l'entonnoir uniquement : nom de fichier pour l'instant,
-/// métadonnées embarquées puis catalogues publics aux jalons suivants.
+/// métadonnées embarquées puis catalogues publics aux étapes suivantes de M1.
 /// L'arborescence de dossiers devient des collections éditables (décision produit).
 public struct Ingestor: Sendable {
     public init() {}
 
     public func ingest(report: ScanReport, sourceFolder: URL, into db: CatalogDatabase) throws -> IngestReport {
         var result = IngestReport()
-        result.total = report.files.count
+        result.scanned = report.files.count
         result.unsupported = report.unsupportedCount
 
+        let rootPath = sourceFolder.standardizedFileURL.path
         let duplicatePaths: Set<String> = Set(
             report.duplicateGroups.flatMap { $0.dropFirst().map(\.path) }
         )
 
         try db.pool.write { dbConn in
-            try SourceFolder(path: sourceFolder.standardizedFileURL.path)
-                .insert(dbConn, onConflict: .ignore)
+            try SourceFolder(path: rootPath).insert(dbConn, onConflict: .ignore)
 
+            // Documents déjà catalogués pour CE dossier source.
+            let existingPaths = Set(try String.fetchAll(dbConn, sql: """
+                SELECT filePath FROM document
+                WHERE filePath = ? OR filePath LIKE ?
+                """, arguments: [rootPath, rootPath + "/%"]))
+
+            let scannedPaths = Set(report.files.map(\.path))
+
+            // 1. Retirer les disparus.
+            let vanished = existingPaths.subtracting(scannedPaths)
+            if !vanished.isEmpty {
+                try Document.filter(vanished.contains(Column("filePath"))).deleteAll(dbConn)
+                result.removed = vanished.count
+            }
+
+            // 2. Ajouter les nouveaux.
             var collectionsByFolder: [String: BookCollection] = [:]
-
             for file in report.files {
+                if existingPaths.contains(file.path) {
+                    result.kept += 1
+                    continue
+                }
+
                 let guess = FilenameParser.parse(fileName: file.fileName)
                 let isDuplicate = duplicatePaths.contains(file.path)
 
@@ -56,16 +91,13 @@ public struct Ingestor: Sendable {
                     result.needsReview += 1
                 }
 
-                let work = Work(
-                    title: guess.title,
-                    curationStatus: status,
-                    confidence: confidence
-                )
+                let work = Work(title: guess.title, curationStatus: status, confidence: confidence)
                 try work.insert(dbConn)
 
                 if let authorName = guess.author {
                     let creator = try Self.findOrCreateCreator(named: authorName, in: dbConn)
-                    try WorkCreator(workId: work.id, creatorId: creator.id).insert(dbConn, onConflict: .ignore)
+                    try WorkCreator(workId: work.id, creatorId: creator.id)
+                        .insert(dbConn, onConflict: .ignore)
                 }
 
                 let edition = Edition(
@@ -88,6 +120,7 @@ public struct Ingestor: Sendable {
                     confidence: confidence
                 )
                 try document.insert(dbConn)
+                result.added += 1
 
                 // Dossiers → collections : chaque niveau de l'arborescence source
                 // devient une collection, l'œuvre est rattachée au niveau le plus profond.
@@ -102,6 +135,15 @@ public struct Ingestor: Sendable {
                         .insert(dbConn, onConflict: .ignore)
                 }
             }
+
+            // 3. Ramasse-miettes : éditions sans document, œuvres sans édition.
+            try dbConn.execute(sql: """
+                DELETE FROM edition WHERE id NOT IN
+                    (SELECT DISTINCT editionId FROM document WHERE editionId IS NOT NULL)
+                """)
+            try dbConn.execute(sql: """
+                DELETE FROM work WHERE id NOT IN (SELECT DISTINCT workId FROM edition)
+                """)
         }
 
         return result
