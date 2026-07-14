@@ -92,6 +92,20 @@ struct FilenameParserTests {
         #expect(guess.isbn13 == "9782707302144")
     }
 
+    @Test("Sans-date ND et suffixe de copie (conventions de la Bibliothèque céleste)")
+    func noDateAndCopySuffix() {
+        let sellars = FilenameParser.parse(fileName: "Sellars_ND_Kant-s-Transcendental-Idealism.txt")
+        #expect(sellars.confidence == .structured)
+        #expect(sellars.author == "Sellars")
+        #expect(sellars.year == nil)
+        #expect(sellars.title == "Kant s Transcendental Idealism")
+
+        let celan = FilenameParser.parse(fileName: "Celan_1959_Grille-de-parole_1.azw3")
+        #expect(celan.confidence == .structured)
+        #expect(celan.year == "1959")
+        #expect(celan.title == "Grille de parole")
+    }
+
     @Test("Nom chaotique → repli honnête, à faire vérifier")
     func fallback() {
         let guess = FilenameParser.parse(fileName: "scan_final_VERSION2.pdf")

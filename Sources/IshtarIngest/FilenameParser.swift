@@ -47,16 +47,35 @@ public enum FilenameParser {
     }
 
     /// Convention `Auteur_Année_Titre` héritée des bibliothèques déjà rangées à la main.
+    /// L'année accepte les sans-date (`ND`, `SD`, `s.d.`) — fréquents pour les tapuscrits,
+    /// cours et archives — et un éventuel suffixe de copie `_1`, `_2` est écarté du titre.
     private static func parseAuthorYearTitle(stem: String) -> MetadataGuess? {
-        let parts = stem.components(separatedBy: "_")
+        var parts = stem.components(separatedBy: "_")
         guard parts.count >= 3 else { return nil }
+
+        // Suffixe de copie : « Celan_1959_Grille-de-parole_1 ».
+        if parts.count > 3, let last = parts.last,
+           last.count <= 2, last.allSatisfy(\.isNumber)
+        {
+            parts.removeLast()
+        }
+
         let author = parts[0].trimmingCharacters(in: .whitespaces)
-        let year = parts[1].trimmingCharacters(in: .whitespaces)
-        guard !author.isEmpty,
-              MetadataPatterns.firstMatch(#"^(1[0-9]{3}|20\d{2})[a-z]?$"#, in: year) != nil
-        else { return nil }
+        let yearToken = parts[1].trimmingCharacters(in: .whitespaces)
+
+        let year: String?
+        if MetadataPatterns.firstMatch(#"^(1[0-9]{3}|20\d{2})[a-z]?$"#, in: yearToken) != nil {
+            year = yearToken
+        } else if ["nd", "n.d.", "sd", "s.d."].contains(yearToken.lowercased()) {
+            year = nil
+        } else {
+            return nil
+        }
+
+        guard !author.isEmpty else { return nil }
         let title = parts.dropFirst(2).joined(separator: " ")
             .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { return nil }
         return MetadataGuess(title: title, author: author, year: year, confidence: .structured)
