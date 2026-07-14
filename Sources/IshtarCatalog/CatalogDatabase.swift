@@ -113,8 +113,31 @@ public final class CatalogDatabase: Sendable {
             }
         }
 
-        // Les migrations suivantes (FTS5 plein texte, embeddings, annotations, liens,
-        // artéfacts, conversations du démon) arrivent avec les jalons M1–M3.
+        // Pages extraites + index plein texte FTS5 (WP-03). Additive : après v1.
+        migrator.registerMigration("v2_document_pages") { db in
+            // Une ligne par « page » de texte extraite d'un document. Le fichier
+            // source reste en lecture seule (invariant n° 2) : ces pages vivent
+            // dans la base, jamais dans le dossier scanné.
+            try db.create(table: "document_page") { t in
+                t.column("documentId", .text).notNull()
+                    .references("document", onDelete: .cascade)
+                t.column("pageNumber", .integer).notNull()
+                t.column("content", .text).notNull()
+                t.primaryKey(["documentId", "pageNumber"])
+            }
+
+            // Index FTS5 synchronisé par déclencheurs GRDB sur le contenu des pages.
+            // unicode61 + remove_diacritics 2 : la recherche « Verité » retrouve
+            // « vérité » (repli des diacritiques à l'indexation ET à la requête).
+            try db.create(virtualTable: "document_page_fts", using: FTS5()) { t in
+                t.synchronize(withTable: "document_page")
+                t.column("content")
+                t.tokenizer = .unicode61(diacritics: .remove)
+            }
+        }
+
+        // Les migrations suivantes (embeddings, annotations, liens, artéfacts,
+        // conversations du démon) arrivent avec les jalons M2–M4.
 
         return migrator
     }

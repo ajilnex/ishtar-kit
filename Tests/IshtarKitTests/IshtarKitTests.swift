@@ -27,8 +27,16 @@ enum Fixtures {
         _ = pageText
     }
 
-    /// Un EPUB minimal : container.xml + OPF Dublin Core.
-    static func makeEPUB(at url: URL, title: String, author: String, year: String, isbn13: String?) throws {
+    /// Un EPUB minimal : container.xml + OPF Dublin Core. Si `bodyText` est fourni,
+    /// on ajoute un item de spine XHTML porteur de ce texte (pour tester l'extraction).
+    static func makeEPUB(
+        at url: URL,
+        title: String,
+        author: String,
+        year: String,
+        isbn13: String?,
+        bodyText: String? = nil
+    ) throws {
         let archive = try Archive(url: url, accessMode: .create)
 
         let container = """
@@ -40,6 +48,24 @@ enum Fixtures {
         </container>
         """
         let identifier = isbn13.map { "<dc:identifier>urn:isbn:\($0)</dc:identifier>" } ?? ""
+
+        // Un chapitre XHTML optionnel, référencé par le manifest et le spine.
+        var extraFiles: [(String, String)] = []
+        var manifestItems = ""
+        var spineItems = ""
+        if let bodyText {
+            let xhtml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <html xmlns="http://www.w3.org/1999/xhtml">
+              <head><title>\(title)</title></head>
+              <body><p>\(bodyText)</p></body>
+            </html>
+            """
+            extraFiles.append(("OEBPS/chapter1.xhtml", xhtml))
+            manifestItems = #"<item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>"#
+            spineItems = #"<itemref idref="ch1"/>"#
+        }
+
         let opf = """
         <?xml version="1.0" encoding="UTF-8"?>
         <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
@@ -51,10 +77,12 @@ enum Fixtures {
             <dc:publisher>Éditions de test</dc:publisher>
             \(identifier)
           </metadata>
+          <manifest>\(manifestItems)</manifest>
+          <spine>\(spineItems)</spine>
         </package>
         """
 
-        for (path, content) in [("META-INF/container.xml", container), ("OEBPS/content.opf", opf)] {
+        for (path, content) in [("META-INF/container.xml", container), ("OEBPS/content.opf", opf)] + extraFiles {
             let data = Data(content.utf8)
             try archive.addEntry(
                 with: path,

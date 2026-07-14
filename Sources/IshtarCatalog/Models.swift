@@ -163,6 +163,25 @@ public struct Document: Identifiable, Codable, Hashable, Sendable, FetchableReco
     }
 }
 
+/// Une page de texte extraite d'un document, unité d'indexation plein texte.
+/// Le fichier source n'est jamais modifié : ces pages vivent dans la base.
+/// L'extraction est idempotente (les pages d'un document sont remplacées en bloc).
+public struct DocumentPage: Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "document_page"
+
+    public var documentId: UUID
+    /// Numéro de page (1-based). Pour les PDF, la page réelle ; pour les autres
+    /// formats, un compteur séquentiel sur l'ordre de lecture.
+    public var pageNumber: Int
+    public var content: String
+
+    public init(documentId: UUID, pageNumber: Int, content: String) {
+        self.documentId = documentId
+        self.pageNumber = pageNumber
+        self.content = content
+    }
+}
+
 // MARK: - Personnes et attributions
 
 public struct Creator: Identifiable, Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {

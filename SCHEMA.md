@@ -35,5 +35,21 @@ Ishtar sait dire « je sais », « je crois », « j'ai besoin d'aide » — à 
 - Identifiants : UUID, encodés par GRDB (blob 16 octets). Susceptible de passer en
   texte avant la première release publique — sera documenté ici.
 - Journal WAL. Encodage des dates : format GRDB par défaut.
-- Migrations à venir (M1–M3) : pages extraites + FTS5, annotations ancrées, liens typés,
-  artéfacts, embeddings (sqlite-vec, dimension par modèle), conversations du démon.
+- Migrations à venir (M2–M3) : annotations ancrées, liens typés, artéfacts,
+  embeddings (sqlite-vec, dimension par modèle), conversations du démon.
+
+## Migration v2 — pages extraites et plein texte (WP-03)
+
+Additive, après v1.
+
+- **document_page** — une ligne par « page » de texte extraite d'un document.
+  - `documentId` → `document(id)` (`ON DELETE CASCADE`), `pageNumber` (1-based),
+    `content` ; clé primaire (`documentId`, `pageNumber`).
+  - Pour un PDF, `pageNumber` est la page réelle ; pour EPUB/TXT/MD, un compteur
+    séquentiel sur l'ordre de lecture (item de spine, ou tranche de ~4000 car.).
+  - L'extraction est idempotente : les pages d'un document sont remplacées en bloc.
+    Un PDF scanné (< ~50 car./page) n'est pas indexé et porte `document.needsOCR`.
+- **document_page_fts** — table virtuelle FTS5 synchronisée (déclencheurs GRDB)
+  avec `document_page`, colonne indexée `content`, tokenizer `unicode61` avec
+  `remove_diacritics 2` : la recherche « Verité » retrouve « vérité ». Classement
+  par `bm25`, extraits par `snippet`.

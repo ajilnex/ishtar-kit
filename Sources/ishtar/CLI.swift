@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import IshtarCatalog
 import IshtarIngest
+import IshtarSearch
 
 @main
 struct IshtarCLI: AsyncParsableCommand {
@@ -9,7 +10,7 @@ struct IshtarCLI: AsyncParsableCommand {
         commandName: "ishtar",
         abstract: "Ishtar — le moteur de bibliothèque savante. / The scholarly library engine.",
         version: "0.1.0 (M0)",
-        subcommands: [Scan.self, Ingest.self]
+        subcommands: [Scan.self, Ingest.self, Extract.self, Search.self]
     )
 }
 
@@ -86,5 +87,56 @@ struct Ingest: AsyncParsableCommand {
         print("  doublons          \(report.duplicates)")
         print("Collections créées  \(report.collectionsCreated)")
         print("Fichiers non gérés  \(report.unsupported)")
+    }
+}
+
+struct Extract: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Extrait le texte des documents et alimente l'index plein texte (FTS5)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+
+        print("Extraction du texte : \(db.path)")
+        print(String(repeating: "─", count: 60))
+
+        let processed = try await ExtractionPipeline().extractAllPending(into: database) { done, total in
+            // Progression réécrite sur la même ligne (stderr), sobre.
+            let pct = total == 0 ? 100 : done * 100 / total
+            FileHandle.standardError.write(Data("\r  \(done)/\(total) (\(pct) %)".utf8))
+        }
+        FileHandle.standardError.write(Data("\n".utf8))
+
+        print("Documents extraits  \(processed)")
+    }
+}
+
+struct Search: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Cherche un passage dans le texte plein des documents (FTS5, bm25)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Argument(help: "Les termes à chercher.")
+    var terms: [String]
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let query = terms.joined(separator: " ")
+        let hits = try await FulltextSearch(db: database).search(query)
+
+        print("Recherche « \(query) » : \(hits.count) passage(s)")
+        print(String(repeating: "─", count: 60))
+        for hit in hits {
+            let authors = hit.authors.isEmpty ? "" : " — " + hit.authors.joined(separator: ", ")
+            print("\(hit.title)\(authors)  [p. \(hit.pageNumber)]")
+            print("  \(hit.snippet)")
+        }
     }
 }
