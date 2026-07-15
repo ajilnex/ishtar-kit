@@ -35,7 +35,7 @@ public struct LibraryScanner: Sendable {
     public func scan(directory: URL) -> ScanReport {
         var report = ScanReport()
         let fileManager = FileManager.default
-        let keys: [URLResourceKey] = [.fileSizeKey, .isRegularFileKey]
+        let keys: [URLResourceKey] = [.fileSizeKey, .isRegularFileKey, .isDirectoryKey]
 
         guard let enumerator = fileManager.enumerator(
             at: directory,
@@ -46,9 +46,18 @@ public struct LibraryScanner: Sendable {
         let rootPath = directory.standardizedFileURL.path
 
         for case let fileURL as URL in enumerator {
-            guard let resources = try? fileURL.resourceValues(forKeys: Set(keys)),
-                  resources.isRegularFile == true
-            else { continue }
+            guard let resources = try? fileURL.resourceValues(forKeys: Set(keys)) else { continue }
+
+            // Dossiers annexes Kindle « *.sdr » : entièrement ignorés (ni documents,
+            // ni non-gérés) — on n'énumère pas leur contenu.
+            if resources.isDirectory == true {
+                if fileURL.pathExtension.lowercased() == "sdr" {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+
+            guard resources.isRegularFile == true else { continue }
 
             guard let format = DocumentFormat(fileExtension: fileURL.pathExtension) else {
                 report.unsupportedCount += 1

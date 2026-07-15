@@ -134,6 +134,53 @@ struct FilenameParserTests {
         #expect(celan.title == "Grille de parole")
     }
 
+    @Test("Convention Z-Library avec auteur → structured")
+    func zLibraryWithAuthor() {
+        let hegel = FilenameParser.parse(fileName: "Hegel, les actes de lesprit (Bernard Bourgeois) (Z-Library).pdf")
+        #expect(hegel.confidence == .structured)
+        #expect(hegel.title == "Hegel, les actes de lesprit")
+        #expect(hegel.author == "Bernard Bourgeois")
+
+        // Doublons entre crochets et marqueur de copie « (1) ».
+        let derrida = FilenameParser.parse(fileName: "Marges – de la philosophie (Derrida, Jacques [Derrida, Jacques]) (Z-Library)(1).epub")
+        #expect(derrida.confidence == .structured)
+        #expect(derrida.title == "Marges – de la philosophie")
+        #expect(derrida.author == "Derrida, Jacques")
+
+        // Annotation nichée « (editor) » et variante Z-lib.org.
+        let webb = FilenameParser.parse(fileName: "The Nature of Reality (Richard Webb (editor)) (Z-lib.org).pdf")
+        #expect(webb.confidence == .structured)
+        #expect(webb.author == "Richard Webb")
+        #expect(webb.title == "The Nature of Reality")
+    }
+
+    @Test("Z-Library sans auteur fiable → repli titre propre")
+    func zLibraryDoubtfulAuthor() {
+        // Dernière parenthèse = marqueur d'édition, pas un nom.
+        let edition = FilenameParser.parse(fileName: "L'Attaque des Titans Chapitre 1 (French Edition) (Z-Library).epub")
+        #expect(edition.confidence == .fallback)
+        #expect(edition.author == nil)
+        #expect(edition.title == "L'Attaque des Titans Chapitre 1")
+
+        // Dernière parenthèse = année seule.
+        let year = FilenameParser.parse(fileName: "Un manuscrit anonyme (2019) (Z-Library).pdf")
+        #expect(year.confidence == .fallback)
+        #expect(year.author == nil)
+        #expect(year.title == "Un manuscrit anonyme")
+    }
+
+    @Test("Convention Scribd → repli avec titre nettoyé sans l'ID")
+    func scribdNumericPrefix() {
+        let foucault = FilenameParser.parse(fileName: "111503479-Surveiller-et-Punir.pdf")
+        #expect(foucault.confidence == .fallback)
+        #expect(foucault.author == nil)
+        #expect(foucault.title == "Surveiller et Punir")
+
+        let derrida = FilenameParser.parse(fileName: "168204597-Derrida-Jacques-La-Voix-et-le-Phenomene.pdf")
+        #expect(derrida.confidence == .fallback)
+        #expect(derrida.title == "Derrida Jacques La Voix et le Phenomene")
+    }
+
     @Test("Nom chaotique → repli honnête, à faire vérifier")
     func fallback() {
         let guess = FilenameParser.parse(fileName: "scan_final_VERSION2.pdf")
@@ -211,6 +258,27 @@ struct IngestTests {
         #expect(report.unsupportedCount == 1)
         #expect(report.duplicateGroups.count == 1)
         #expect(report.duplicateGroups[0].count == 2)
+    }
+
+    @Test("Les dossiers annexes « *.sdr » sont ignorés : ni documents, ni non-gérés")
+    func skipsSidecarFolders() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-sdr-\(UUID().uuidString)")
+        let sidecar = root.appendingPathComponent("Lettre au père (Franz Kafka) (Z-Library).sdr")
+        try FileManager.default.createDirectory(at: sidecar, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Un vrai document à la racine, et deux fichiers cachés dans le dossier annexe.
+        try Data("livre".utf8).write(to: root.appendingPathComponent("Kant_1781_Critique.pdf"))
+        try Data("annexe".utf8).write(to: sidecar.appendingPathComponent("cdeKey.pdf"))
+        try Data("annexe".utf8).write(to: sidecar.appendingPathComponent("state.dat"))
+
+        let report = LibraryScanner(computeHashes: false).scan(directory: root)
+        #expect(report.files.count == 1)
+        #expect(report.files.first?.fileName == "Kant_1781_Critique.pdf")
+        // Le PDF du dossier annexe ne compte pas comme document ; le .dat ne compte
+        // pas comme non-géré : le dossier .sdr est intégralement écarté.
+        #expect(report.unsupportedCount == 0)
     }
 
     @Test("L'ingestion peuple le catalogue et convertit les dossiers en collections")
