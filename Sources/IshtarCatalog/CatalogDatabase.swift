@@ -27,6 +27,15 @@ public final class CatalogDatabase: Sendable {
         try Self.migrator.migrate(pool)
     }
 
+    /// Les migrations connues de cette version du moteur, dans l'ordre.
+    public static var knownMigrationIdentifiers: [String] { migrator.migrations }
+
+    /// Les migrations effectivement appliquées à cette base (manifeste d'archive).
+    public func appliedMigrationIdentifiers() async throws -> [String] {
+        let applied = try await pool.read { try Self.migrator.appliedIdentifiers($0) }
+        return Self.knownMigrationIdentifiers.filter(applied.contains)
+    }
+
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
 

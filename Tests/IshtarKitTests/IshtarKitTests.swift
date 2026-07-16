@@ -680,3 +680,123 @@ struct CatalogStoreTests {
         }
     }
 }
+
+// MARK: - Archive — export/import de bibliothèque
+
+@Suite("Archive — export/import de bibliothèque")
+struct LibraryArchiveTests {
+    /// Round-trip complet : export d'une base peuplée, réimport dans un
+    /// nouveau catalogue avec rebasage des chemins vers un autre dossier source.
+    @Test("Round-trip parfait avec rebasage des chemins de documents")
+    func roundTripWithRebase() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+
+        let work = Work(title: "Critique de la raison pure",
+                        curationStatus: .recognized, confidence: .high)
+        let edition = Edition(workId: work.id, publisher: "PUF", year: "1944")
+        let document = Document(
+            editionId: edition.id,
+            filePath: "/ancien/racine/Philo/K.pdf",
+            originalFileName: "K.pdf",
+            fileSize: 4096,
+            format: .pdf
+        )
+        try await db.pool.write { conn in
+            try work.insert(conn)
+            try edition.insert(conn)
+            try document.insert(conn)
+            try conn.execute(sql: """
+                INSERT INTO document_page(documentId, pageNumber, content)
+                VALUES (?, 1, 'Les intuitions sans concepts sont aveugles.')
+                """, arguments: [document.id])
+            try SourceFolder(path: "/ancien/racine").insert(conn)
+        }
+
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-archive-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let archiveURL = tempDir.appendingPathComponent("Test.ishtar-archive", isDirectory: true)
+        let manifest = try await LibraryArchive.export(
+            db: db, sourceFolderPath: "/ancien/racine", to: archiveURL)
+
+        #expect(manifest.formatVersion == 1)
+        #expect(manifest.documentCount == 1)
+        #expect(manifest.appliedMigrations == CatalogDatabase.knownMigrationIdentifiers)
+        #expect(FileManager.default.fileExists(
+            atPath: archiveURL.appendingPathComponent("manifest.json").path))
+        #expect(FileManager.default.fileExists(
+            atPath: archiveURL.appendingPathComponent("catalog.sqlite").path))
+
+        let restoredURL = tempDir.appendingPathComponent("restaure.sqlite")
+        _ = try await LibraryArchive.importArchive(
+            from: archiveURL, toCatalogAt: restoredURL,
+            rebasingSourceTo: "/nouveau/chez-moi")
+
+        let restored = try CatalogDatabase(at: restoredURL)
+        try await restored.pool.read { conn in
+            #expect(try Work.fetchCount(conn) == 1)
+            let fetchedWork = try #require(try Work.fetchOne(conn, key: work.id))
+            #expect(fetchedWork.title == "Critique de la raison pure")
+
+            #expect(try Document.fetchCount(conn) == 1)
+            let fetchedDoc = try #require(try Document.fetchOne(conn, key: document.id))
+            #expect(fetchedDoc.filePath == "/nouveau/chez-moi/Philo/K.pdf")
+
+            let pageContent = try String.fetchOne(conn, sql: """
+                SELECT content FROM document_page WHERE documentId = ? AND pageNumber = 1
+                """, arguments: [document.id])
+            #expect(pageContent == "Les intuitions sans concepts sont aveugles.")
+
+            let folderPath = try String.fetchOne(conn, sql: "SELECT path FROM source_folder")
+            #expect(folderPath == "/nouveau/chez-moi")
+        }
+    }
+
+    /// L'import refuse proprement les archives venues d'une version future.
+    @Test("Refus des versions futures : format et migrations inconnues")
+    func rejectsFutureVersions() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-archive-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let archiveURL = tempDir.appendingPathComponent("Test.ishtar-archive", isDirectory: true)
+        _ = try await LibraryArchive.export(db: db, sourceFolderPath: nil, to: archiveURL)
+
+        let manifestURL = archiveURL.appendingPathComponent("manifest.json")
+        let restoredURL = tempDir.appendingPathComponent("restaure.sqlite")
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+
+        // Migration inconnue → .futureSchema.
+        var future = try decoder.decode(
+            LibraryArchive.Manifest.self, from: Data(contentsOf: manifestURL))
+        future.appliedMigrations.append("v99_future")
+        try encoder.encode(future).write(to: manifestURL)
+
+        await #expect(throws: LibraryArchive.LibraryArchiveError.futureSchema(["v99_future"])) {
+            try await LibraryArchive.importArchive(
+                from: archiveURL, toCatalogAt: restoredURL, rebasingSourceTo: nil)
+        }
+
+        // Format futur → .futureFormat.
+        var futureFormat = try decoder.decode(
+            LibraryArchive.Manifest.self, from: Data(contentsOf: manifestURL))
+        futureFormat.appliedMigrations = CatalogDatabase.knownMigrationIdentifiers
+        futureFormat.formatVersion = 2
+        try encoder.encode(futureFormat).write(to: manifestURL)
+
+        await #expect(throws: LibraryArchive.LibraryArchiveError.futureFormat(2)) {
+            try await LibraryArchive.importArchive(
+                from: archiveURL, toCatalogAt: restoredURL, rebasingSourceTo: nil)
+        }
+    }
+}
