@@ -42,7 +42,9 @@ public struct SemanticIndexer: Sendable {
                 SELECT documentId, pageNumber, content FROM document_page
                 """)
             return rows.compactMap { row in
-                guard let id = UUID(uuidString: row["documentId"]) else { return nil }
+                // GRDB stocke les UUID en blob de 16 octets : on décode en UUID,
+                // jamais en String (leçon d'épreuve du réel).
+                guard let id: UUID = row["documentId"] else { return nil }
                 let key = EmbeddingStore.PageKey(documentId: id, pageNumber: row["pageNumber"])
                 guard !already.contains(key) else { return nil }
                 return (key, row["content"])

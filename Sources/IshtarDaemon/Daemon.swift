@@ -27,8 +27,33 @@ public enum DaemonEvent: Sendable {
     case token(String)
     case toolCall(name: String, summary: String)
     case uiCommand(UICommand)
+    /// Les citations vérifiées de la réponse : l'app les rend en puces
+    /// cliquables (« Titre », p. N → ouvrir, surbrillance transitoire).
+    case citations([CitationChip])
     case finished
     case failed(message: String)
+}
+
+/// Une citation vérifiée, prête pour l'interface.
+public struct CitationChip: Sendable, Identifiable, Equatable {
+    public var id: String { "\(documentId)-\(page)" }
+    public let documentId: UUID
+    public let page: Int
+    public let title: String
+    /// Les mots exacts, pour la surbrillance transitoire à l'ouverture.
+    public let quote: String?
+    /// Faux si la citation n'a pas pu être vérifiée (texte non extrait, ou
+    /// échec resté après le budget de corrections) — l'app l'affiche marquée.
+    public let verified: Bool
+
+    public init(documentId: UUID, page: Int, title: String,
+                quote: String?, verified: Bool) {
+        self.documentId = documentId
+        self.page = page
+        self.title = title
+        self.quote = quote
+        self.verified = verified
+    }
 }
 
 /// Commandes que le démon peut adresser à l'interface — dont son geste signature :

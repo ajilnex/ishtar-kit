@@ -144,7 +144,7 @@ struct DaemonLoopTests {
             case .uiCommand(let ui): uiCommands.append(ui)
             case .finished: finished = true
             case .failed(let message): Issue.record("échec : \(message)")
-            case .thought: break
+            case .thought, .citations: break
             }
         }
 
@@ -158,5 +158,141 @@ struct DaemonLoopTests {
         } else {
             Issue.record("commande openDocument attendue")
         }
+    }
+}
+
+// MARK: - Citations vérifiées (invariant n° 6)
+
+@Suite("Citations — extraction et cascade de vérification")
+struct CitationVerifierTests {
+    /// Catalogue avec un document dont deux pages sont extraites.
+    private func makeLibrary() async throws -> (CatalogDatabase, UUID) {
+        let db = try CatalogDatabase(inMemory: ())
+        let work = Work(title: "Critique de la raison pure")
+        let edition = Edition(workId: work.id)
+        let document = Document(editionId: edition.id, filePath: "/tmp/k.pdf",
+                                originalFileName: "k.pdf", fileSize: 1, format: .pdf)
+        try await db.pool.write { conn in
+            try work.insert(conn)
+            try edition.insert(conn)
+            try document.insert(conn)
+            try conn.execute(sql: """
+                INSERT INTO document_page(documentId, pageNumber, content)
+                VALUES (?, 1, 'La raison pure examine ses propres limites.'),
+                       (?, 2, 'Les intuitions sans concepts sont aveugles.')
+                """, arguments: [document.id, document.id])
+        }
+        return (db, document.id)
+    }
+
+    @Test("Extraction des marqueurs [[cite:…]]")
+    func extraction() {
+        let id = UUID()
+        let text = """
+        Kant l'écrit [[cite:\(id.uuidString)|p=2|"intuitions sans concepts"]] et
+        ailleurs [[cite:\(id.uuidString)|p=1]].
+        """
+        let citations = CitationVerifier.extract(from: text)
+        #expect(citations.count == 2)
+        #expect(citations[0].quote == "intuitions sans concepts")
+        #expect(citations[1].quote == nil)
+        #expect(citations[0].documentId == id)
+    }
+
+    @Test("La cascade : valide, source invalide, page hors bornes, introuvable, trouvé ailleurs")
+    func cascade() async throws {
+        let (db, docId) = try await makeLibrary()
+        let verifier = CitationVerifier(db: db)
+
+        func verdict(_ marker: String) async -> CitationVerifier.Verdict? {
+            await verifier.verify(text: marker).first?.verdict
+        }
+
+        // Valide : bons mots, bonne page (diacritiques repliées).
+        #expect(await verdict("[[cite:\(docId.uuidString)|p=2|\"intuitions sans concepts sont aveugles\"]]")
+                == .valid(title: "Critique de la raison pure"))
+        // Source inconnue.
+        #expect(await verdict("[[cite:\(UUID().uuidString)|p=1|\"peu importe les mots\"]]")
+                == .invalidSource)
+        // Page hors bornes (2 pages extraites).
+        #expect(await verdict("[[cite:\(docId.uuidString)|p=99|\"peu importe les mots\"]]")
+                == .pageOutOfRange(title: "Critique de la raison pure", maxPage: 2))
+        // Extrait introuvable.
+        #expect(await verdict("[[cite:\(docId.uuidString)|p=1|\"le noumène chevauche le phénomène\"]]")
+                == .quoteNotFound(title: "Critique de la raison pure"))
+        // Trouvé ailleurs : le feedback le plus utile.
+        #expect(await verdict("[[cite:\(docId.uuidString)|p=1|\"intuitions sans concepts sont aveugles\"]]")
+                == .foundElsewhere(title: "Critique de la raison pure", actualPage: 2))
+    }
+}
+
+/// Client scripté pour la boucle : première réponse avec une citation FAUSSE
+/// (mauvaise page) ; après le feedback de validation, réponse corrigée.
+private struct SelfCorrectingClient: LLMClient {
+    let docId: UUID
+
+    func stream(messages: [LLMMessage], tools: [LLMToolSpec])
+        -> AsyncThrowingStream<LLMChunk, Error>
+    {
+        AsyncThrowingStream { continuation in
+            let gotFeedback = messages.contains {
+                $0.role == .user && $0.content.contains("[Validation des citations")
+            }
+            let page = gotFeedback ? 2 : 1
+            continuation.yield(.text(
+                "Kant écrit que les intuitions sans concepts sont aveugles " +
+                "[[cite:\(docId.uuidString)|p=\(page)|\"intuitions sans concepts sont aveugles\"]]."))
+            continuation.yield(.finished(toolCalls: []))
+            continuation.finish()
+        }
+    }
+}
+
+@Suite("Citations — la boucle de correction")
+struct CitationLoopTests {
+    @Test("Une citation fausse est corrigée avant émission ; puces vérifiées émises")
+    func correctionLoop() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let work = Work(title: "Critique de la raison pure")
+        let edition = Edition(workId: work.id)
+        let document = Document(editionId: edition.id, filePath: "/tmp/k.pdf",
+                                originalFileName: "k.pdf", fileSize: 1, format: .pdf)
+        try await db.pool.write { conn in
+            try work.insert(conn)
+            try edition.insert(conn)
+            try document.insert(conn)
+            try conn.execute(sql: """
+                INSERT INTO document_page(documentId, pageNumber, content)
+                VALUES (?, 1, 'Préambule.'),
+                       (?, 2, 'Les intuitions sans concepts sont aveugles.')
+                """, arguments: [document.id, document.id])
+        }
+
+        let session = DaemonSession(
+            client: SelfCorrectingClient(docId: document.id),
+            toolbox: DaemonToolbox(db: db, semantic: nil),
+            verifier: CitationVerifier(db: db))
+
+        var text = ""
+        var corrections = 0
+        var chips: [CitationChip] = []
+        for await event in await session.send("Que dit Kant des intuitions ?") {
+            switch event {
+            case .token(let t): text += t
+            case .toolCall(let name, _) where name == "vérification": corrections += 1
+            case .citations(let c): chips = c
+            default: break
+            }
+        }
+
+        // Un tour de correction, puis la version CORRIGÉE seulement est émise.
+        #expect(corrections == 1)
+        #expect(text.contains("p. 2"))
+        #expect(!text.contains("[[cite:"), "le marqueur machine ne doit jamais s'afficher")
+        #expect(!text.contains("⚠️"))
+        #expect(chips.count == 1)
+        #expect(chips[0].verified)
+        #expect(chips[0].page == 2)
+        #expect(chips[0].title == "Critique de la raison pure")
     }
 }
