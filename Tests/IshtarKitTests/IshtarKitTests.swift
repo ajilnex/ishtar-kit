@@ -589,4 +589,94 @@ struct CatalogStoreTests {
         #expect(after.document.curationStatus == .ignored)
         #expect(after.work.title == row.work.title)
     }
+
+    @Test("Fusion des doublons puis détachement : rattacher, ramasser, réversible")
+    func mergeAndDetach() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+
+        // Deux triplets work/edition/document, MÊME contenu (SHA-256 « abc »).
+        let workA = Work(title: "Titre brut A", curationStatus: .duplicateCandidate, confidence: .low)
+        let editionA = Edition(workId: workA.id, curationStatus: .duplicateCandidate, confidence: .low)
+        let docA = Document(
+            editionId: editionA.id,
+            filePath: "/tmp/A.pdf",
+            originalFileName: "A.pdf",
+            fileSize: 10,
+            contentHash: "abc",
+            format: .pdf,
+            curationStatus: .duplicateCandidate,
+            confidence: .low
+        )
+        let workB = Work(title: "Titre brut B", curationStatus: .duplicateCandidate, confidence: .low)
+        let editionB = Edition(workId: workB.id, curationStatus: .duplicateCandidate, confidence: .low)
+        let docB = Document(
+            editionId: editionB.id,
+            filePath: "/tmp/Copie de A.pdf",
+            originalFileName: "Copie de A.pdf",
+            fileSize: 10,
+            contentHash: "abc",
+            format: .pdf,
+            curationStatus: .duplicateCandidate,
+            confidence: .low
+        )
+        try await db.pool.write { conn in
+            for work in [workA, workB] { try work.insert(conn) }
+            for edition in [editionA, editionB] { try edition.insert(conn) }
+            for document in [docA, docB] { try document.insert(conn) }
+        }
+
+        // Correction humaine de A : c'est elle qui doit primer.
+        try await CatalogStore(db: db).applyUserEdit(
+            workId: workA.id,
+            editionId: editionA.id,
+            documentId: docA.id,
+            edit: RecordEdit(title: "Le vrai titre", authors: ["Autrice"])
+        )
+
+        // Fusion : B rejoint l'édition de A, orphelins ramassés.
+        try await CatalogStore(db: db).merge(duplicates: [docB.id], into: docA.id)
+
+        try await db.pool.read { conn in
+            let mergedB = try #require(try Document.fetchOne(conn, key: docB.id))
+            #expect(mergedB.editionId == editionA.id)
+            #expect(mergedB.curationStatus == .recognized)
+            #expect(mergedB.confidence == .high)
+            #expect(try Work.fetchCount(conn) == 1)
+            #expect(try Edition.fetchCount(conn) == 1)
+            let survivingWork = try #require(try Work.fetchOne(conn, key: workA.id))
+            #expect(survivingWork.title == "Le vrai titre")
+        }
+
+        // Rien n'a touché le disque : les fichiers n'existent pas.
+        #expect(!FileManager.default.fileExists(atPath: docA.filePath))
+        #expect(!FileManager.default.fileExists(atPath: docB.filePath))
+
+        // Détachement : B retrouve une fiche neuve, réversibilité.
+        try await CatalogStore(db: db).detach(documentId: docB.id)
+
+        try await db.pool.read { conn in
+            let detachedB = try #require(try Document.fetchOne(conn, key: docB.id))
+            #expect(detachedB.editionId != editionA.id)
+            let newEditionId = try #require(detachedB.editionId)
+            #expect(detachedB.curationStatus == .needsReview)
+            #expect(detachedB.confidence == .low)
+            #expect(try Work.fetchCount(conn) == 2)
+            let newEdition = try #require(try Edition.fetchOne(conn, key: newEditionId))
+            let newWork = try #require(try Work.fetchOne(conn, key: newEdition.workId))
+            #expect(newWork.title == "Copie de A")
+
+            // La fiche de A est intacte.
+            let keptWork = try #require(try Work.fetchOne(conn, key: workA.id))
+            #expect(keptWork.title == "Le vrai titre")
+            #expect(keptWork.curationStatus == .recognized)
+            #expect(keptWork.confidence == .high)
+        }
+
+        // Fusionner avec l'id conservé dans la liste : sans effet ni erreur.
+        try await CatalogStore(db: db).merge(duplicates: [docA.id], into: docA.id)
+        try await db.pool.read { conn in
+            let keptA = try #require(try Document.fetchOne(conn, key: docA.id))
+            #expect(keptA.editionId == editionA.id)
+        }
+    }
 }

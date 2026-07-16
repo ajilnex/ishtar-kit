@@ -121,6 +121,81 @@ public struct CatalogStore: Sendable {
         }
     }
 
+    /// WP-07 — Fusion d'un groupe de doublons : chaque document donné est
+    /// rattaché à l'édition du document conservé, puis les éditions sans
+    /// document et les œuvres sans édition sont ramassées. Acte humain :
+    /// statut « reconnu », confiance haute, sur tout le groupe. La fiche
+    /// conservée (titre, auteurs, édition) n'est jamais modifiée — les
+    /// corrections humaines priment. Aucun fichier touché.
+    public func merge(duplicates: [UUID], into keptDocumentId: UUID) async throws {
+        try await db.pool.write { conn in
+            guard let kept = try Document.fetchOne(conn, key: keptDocumentId) else {
+                throw DatabaseError(message: "Document conservé introuvable.")
+            }
+            guard let keptEditionId = kept.editionId else {
+                throw DatabaseError(message: "Le document conservé n'a pas d'édition.")
+            }
+
+            // Rattachement des copies à l'édition conservée, statut reconnu.
+            for id in duplicates where id != keptDocumentId {
+                guard var document = try Document.fetchOne(conn, key: id) else { continue }
+                document.editionId = keptEditionId
+                document.curationStatus = .recognized
+                document.confidence = .high
+                try document.update(conn)
+            }
+
+            // Le conservé, son édition et son œuvre passent aussi en reconnu,
+            // sans toucher titre/auteurs/année.
+            var keptDocument = kept
+            keptDocument.curationStatus = .recognized
+            keptDocument.confidence = .high
+            try keptDocument.update(conn)
+
+            if var edition = try Edition.fetchOne(conn, key: keptEditionId) {
+                edition.curationStatus = .recognized
+                edition.confidence = .high
+                try edition.update(conn)
+
+                if var work = try Work.fetchOne(conn, key: edition.workId) {
+                    work.curationStatus = .recognized
+                    work.confidence = .high
+                    try work.update(conn)
+                }
+            }
+
+            // Ramasse-miettes : éditions sans document, œuvres sans édition.
+            try conn.execute(sql: """
+                DELETE FROM edition WHERE id NOT IN
+                    (SELECT DISTINCT editionId FROM document WHERE editionId IS NOT NULL)
+                """)
+            try conn.execute(sql: """
+                DELETE FROM work WHERE id NOT IN (SELECT DISTINCT workId FROM edition)
+                """)
+        }
+    }
+
+    /// WP-07 — Réversibilité : détache une copie en lui redonnant une fiche
+    /// à part (œuvre + édition neuves, titre = nom de fichier sans extension,
+    /// statut « à identifier », confiance basse). L'utilisateur ré-identifie
+    /// ensuite (« Proposer à nouveau », ⌘S).
+    public func detach(documentId: UUID) async throws {
+        try await db.pool.write { conn in
+            guard var document = try Document.fetchOne(conn, key: documentId) else { return }
+
+            let stem = (document.originalFileName as NSString).deletingPathExtension
+            let work = Work(title: stem, curationStatus: .needsReview, confidence: .low)
+            try work.insert(conn)
+            let edition = Edition(workId: work.id, curationStatus: .needsReview, confidence: .low)
+            try edition.insert(conn)
+
+            document.editionId = edition.id
+            document.curationStatus = .needsReview
+            document.confidence = .low
+            try document.update(conn)
+        }
+    }
+
     private func normalized(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty
