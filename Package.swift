@@ -18,6 +18,12 @@ let package = Package(
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.19"),
     ],
     targets: [
+        // sqlite-vec (MIT/Apache-2.0), amalgamation C : recherche vectorielle
+        // dans SQLite. Conforme à la politique de licences (60-CAP §2).
+        .target(
+            name: "CSQLiteVec",
+            cSettings: [.define("SQLITE_CORE")]
+        ),
         .target(
             name: "IshtarCatalog",
             dependencies: [.product(name: "GRDB", package: "GRDB.swift")]
@@ -31,11 +37,17 @@ let package = Package(
         ),
         .target(
             name: "IshtarSearch",
-            dependencies: ["IshtarCatalog", .product(name: "GRDB", package: "GRDB.swift")]
+            dependencies: [
+                "IshtarCatalog", "CSQLiteVec",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
         ),
         .target(
             name: "IshtarDaemon",
-            dependencies: ["IshtarCatalog", "IshtarSearch"]
+            dependencies: [
+                "IshtarCatalog", "IshtarSearch",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
         ),
         .executableTarget(
             name: "ishtar",
@@ -46,7 +58,7 @@ let package = Package(
         ),
         .testTarget(
             name: "IshtarKitTests",
-            dependencies: ["IshtarCatalog", "IshtarIngest", "IshtarSearch"]
+            dependencies: ["IshtarCatalog", "IshtarIngest", "IshtarSearch", "IshtarDaemon"]
         ),
     ]
 )

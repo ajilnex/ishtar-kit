@@ -9,9 +9,64 @@ struct IshtarCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ishtar",
         abstract: "Ishtar — le moteur de bibliothèque savante. / The scholarly library engine.",
-        version: "0.1.0 (M0)",
-        subcommands: [Scan.self, Ingest.self, Extract.self, Search.self]
+        version: "0.2.0",
+        subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
+                      Embed.self, Find.self]
     )
+}
+
+struct Embed: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Vectorise localement les pages extraites (index sémantique, rien ne sort de la machine)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let store = try EmbeddingStore(at: EmbeddingStore.url(forCatalog: db))
+        let embeddings = try LocalEmbeddings()
+        let indexer = SemanticIndexer(db: database, store: store, embeddings: embeddings)
+
+        print("Modèle local : \(embeddings.modelID) (dimension \(embeddings.dimension))")
+        let done = try await indexer.indexAllPending { done, total in
+            print("\rVectorisation \(done)/\(total)…", terminator: "")
+            fflush(stdout)
+        }
+        print("\n\(done) page(s) vectorisée(s). Index : \(try store.count()) vecteurs.")
+    }
+}
+
+struct Find: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Recherche hybride (plein texte + sémantique) : décrire vaguement suffit."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Argument(help: "La description ou les termes du passage cherché.")
+    var query: [String]
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let store = try EmbeddingStore(at: EmbeddingStore.url(forCatalog: db))
+        let embeddings = try LocalEmbeddings()
+        try await embeddings.ensureAssets()
+        let search = SemanticSearch(db: database, store: store, embeddings: embeddings)
+
+        let hits = try await search.search(query.joined(separator: " "), limit: 12)
+        guard !hits.isEmpty else {
+            print("Aucun passage trouvé.")
+            return
+        }
+        for hit in hits {
+            let authors = hit.authors.isEmpty ? "" : " — \(hit.authors.joined(separator: ", "))"
+            print("« \(hit.title) »\(authors) [p. \(hit.pageNumber)]")
+            print("   \(hit.excerpt.replacingOccurrences(of: "\n", with: " "))\n")
+        }
+    }
 }
 
 struct Scan: AsyncParsableCommand {
