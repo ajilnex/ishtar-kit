@@ -87,6 +87,113 @@ struct StreamAccumulatorTests {
     }
 }
 
+// MARK: - Accumulateur SSE Anthropic (pur, sans réseau)
+
+@Suite("Démon — flux Anthropic")
+struct AnthropicStreamAccumulatorTests {
+    @Test("Texte streamé et tool_use fragmenté par input_json_delta sont réassemblés")
+    func toolUseAssembly() {
+        var acc = AnthropicStreamAccumulator()
+
+        let events = [
+            #"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Je "}}"#,
+            #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"cherche."}}"#,
+            #"{"type":"content_block_stop","index":0}"#,
+            #"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"search_library","input":{}}}"#,
+            #"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"qu"}}"#,
+            #"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"ery\":\"kant\"}"}}"#,
+            #"{"type":"content_block_stop","index":1}"#,
+        ]
+        var text = ""
+        for event in events {
+            if let t = acc.ingest(json: Data(event.utf8)) { text += t }
+        }
+        #expect(text == "Je cherche.")
+        #expect(!acc.isDone)
+
+        let calls = acc.finalizedToolCalls()
+        #expect(calls.count == 1)
+        #expect(calls[0].id == "toolu_1")
+        #expect(calls[0].name == "search_library")
+        #expect(calls[0].argumentsJSON == #"{"query":"kant"}"#)
+    }
+
+    @Test("message_stop clôt le flux ; un tool_use sans delta produit des arguments vides")
+    func messageStopAndEmptyInput() {
+        var acc = AnthropicStreamAccumulator()
+        _ = acc.ingest(json: Data(
+            #"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_2","name":"library_stats","input":{}}}"#.utf8))
+        #expect(!acc.isDone)
+        _ = acc.ingest(json: Data(#"{"type":"message_stop"}"#.utf8))
+        #expect(acc.isDone)
+
+        let calls = acc.finalizedToolCalls()
+        #expect(calls.count == 1)
+        #expect(calls[0].argumentsJSON == "{}")
+    }
+}
+
+@Suite("Démon — corps de requête Anthropic")
+struct AnthropicRequestBodyTests {
+    @Test("Un tour outillé : system séparé, blocs text+tool_use, tool_result en message user")
+    func toolTurnMapping() throws {
+        let messages = [
+            LLMMessage(role: .system, content: "Tu es le démon d'Ishtar."),
+            LLMMessage(role: .user, content: "Que dit Kant ?"),
+            LLMMessage(role: .assistant, content: "Je cherche.",
+                       toolCalls: [LLMToolCall(id: "toolu_1", name: "search_library",
+                                               argumentsJSON: #"{"query":"kant"}"#)]),
+            LLMMessage(role: .tool, content: "3 passages trouvés", toolCallID: "toolu_1"),
+        ]
+        let tools = [LLMToolSpec(
+            name: "search_library", description: "Recherche hybride",
+            parametersJSON: #"{"type":"object","properties":{"query":{"type":"string"}}}"#)]
+
+        let data = try AnthropicClient.requestBody(
+            model: "claude-sonnet-5", messages: messages, tools: tools)
+        let payload = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        // Le système est un paramètre séparé, jamais dans messages.
+        #expect(payload["system"] as? String == "Tu es le démon d'Ishtar.")
+        #expect(payload["model"] as? String == "claude-sonnet-5")
+        #expect(payload["stream"] as? Bool == true)
+
+        let apiMessages = try #require(payload["messages"] as? [[String: Any]])
+        #expect(apiMessages.count == 3)
+
+        #expect(apiMessages[0]["role"] as? String == "user")
+        #expect(apiMessages[0]["content"] as? String == "Que dit Kant ?")
+
+        // Assistant : blocs text puis tool_use, avec input désérialisé en objet.
+        #expect(apiMessages[1]["role"] as? String == "assistant")
+        let blocks = try #require(apiMessages[1]["content"] as? [[String: Any]])
+        #expect(blocks.count == 2)
+        #expect(blocks[0]["type"] as? String == "text")
+        #expect(blocks[0]["text"] as? String == "Je cherche.")
+        #expect(blocks[1]["type"] as? String == "tool_use")
+        #expect(blocks[1]["id"] as? String == "toolu_1")
+        #expect(blocks[1]["name"] as? String == "search_library")
+        let input = try #require(blocks[1]["input"] as? [String: Any])
+        #expect(input["query"] as? String == "kant")
+
+        // Résultat d'outil : message user portant un bloc tool_result.
+        #expect(apiMessages[2]["role"] as? String == "user")
+        let results = try #require(apiMessages[2]["content"] as? [[String: Any]])
+        #expect(results.count == 1)
+        #expect(results[0]["type"] as? String == "tool_result")
+        #expect(results[0]["tool_use_id"] as? String == "toolu_1")
+        #expect(results[0]["content"] as? String == "3 passages trouvés")
+
+        // Les outils sont déclarés avec input_schema (objet).
+        let declaredTools = try #require(payload["tools"] as? [[String: Any]])
+        #expect(declaredTools.count == 1)
+        #expect(declaredTools[0]["name"] as? String == "search_library")
+        #expect(declaredTools[0]["input_schema"] is [String: Any])
+    }
+}
+
 // MARK: - Boucle du démon (faux client, vraie boîte à outils)
 
 /// Un client scripté : premier tour → appel d'outil ; second tour → réponse.
