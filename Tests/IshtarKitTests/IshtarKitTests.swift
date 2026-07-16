@@ -835,3 +835,37 @@ struct CrossrefConnectorTests {
         #expect(CrossrefConnector.parse(worksResponse: json) == nil)
     }
 }
+
+// MARK: - Étage 3 : connecteur OpenLibrary
+
+@Suite("Entonnoir — étage 3 : connecteur OpenLibrary (décodage pur)")
+struct OpenLibraryConnectorTests {
+    /// Extrait réaliste d'une réponse /api/books (jscmd=data) : aucun réseau.
+    static let booksJSON = Data("""
+    {"ISBN:9780674727779":{"title":"The Ancient City","authors":[{"name":"Numa Denis Fustel de Coulanges"}],"publish_date":"March 1997","publishers":[{"name":"Harvard University Press"}],"identifiers":{"isbn_13":["9780674727779"]}}}
+    """.utf8)
+
+    @Test("Décode titre, auteur, année, éditeur, ISBN-13")
+    func decodeReponseComplete() throws {
+        let guess = try #require(
+            OpenLibraryConnector.parse(booksResponse: Self.booksJSON, isbn: "9780674727779"))
+        #expect(guess.title == "The Ancient City")
+        #expect(guess.author == "Numa Denis Fustel de Coulanges")
+        #expect(guess.year == "1997")
+        #expect(guess.publisher == "Harvard University Press")
+        #expect(guess.isbn13 == "9780674727779")
+        #expect(guess.confidence == .structured)
+    }
+
+    @Test("ISBN inconnu (objet vide) : aucune proposition")
+    func objetVideRendNil() {
+        let json = Data("{}".utf8)
+        #expect(OpenLibraryConnector.parse(booksResponse: json, isbn: "9780674727779") == nil)
+    }
+
+    @Test("Sans titre : aucune proposition")
+    func sansTitreRendNil() {
+        let json = Data(#"{"ISBN:9780674727779":{"publishers":[{"name":"Harvard University Press"}]}}"#.utf8)
+        #expect(OpenLibraryConnector.parse(booksResponse: json, isbn: "9780674727779") == nil)
+    }
+}
