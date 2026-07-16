@@ -35,6 +35,43 @@ public struct IngestReport: Sendable, Equatable {
 public struct Ingestor: Sendable {
     public init() {}
 
+    /// L'entonnoir mécanique (étages 1-2) : nom de fichier puis métadonnées
+    /// embarquées. Pur, local, sans réseau, sans écriture.
+    public static func mechanicalGuess(fileName: String, fileURL: URL,
+                                       format: DocumentFormat) -> MetadataGuess {
+        var guess = FilenameParser.parse(fileName: fileName)
+        if guess.confidence == .fallback,
+           let embedded = EmbeddedMetadata.read(fileURL: fileURL, format: format)
+        {
+            if embedded.title.isEmpty {
+                // Pas de titre embarqué : on garde le titre de repli du nom
+                // de fichier, mais on récupère ISBN/DOI/auteur trouvés.
+                var merged = embedded
+                merged.title = guess.title
+                merged.confidence = .fallback
+                guess = merged
+            } else {
+                guess = embedded
+            }
+        }
+        return guess
+    }
+
+    /// Rejoue l'entonnoir sur un document déjà catalogué, SANS écrire :
+    /// la proposition est retournée à l'appelant, qui décide (WP-01 —
+    /// l'ingestion ne réécrit jamais l'existant, ce geste est volontaire).
+    /// nil si le document est introuvable.
+    public func repropose(documentId: UUID, into db: CatalogDatabase) async throws -> MetadataGuess? {
+        guard let doc = try await db.pool.read({ conn in
+            try Document.fetchOne(conn, key: documentId)
+        }) else { return nil }
+        return Self.mechanicalGuess(
+            fileName: doc.originalFileName,
+            fileURL: URL(fileURLWithPath: doc.filePath),
+            format: doc.format
+        )
+    }
+
     public func ingest(report: ScanReport, sourceFolder: URL, into db: CatalogDatabase) throws -> IngestReport {
         var result = IngestReport()
         result.scanned = report.files.count
@@ -73,24 +110,11 @@ public struct Ingestor: Sendable {
 
                 // Entonnoir : étage 1 (nom de fichier), puis étage 2 (métadonnées
                 // embarquées) si le nom n'a rien donné. Local, sans réseau.
-                var guess = FilenameParser.parse(fileName: file.fileName)
-                if guess.confidence == .fallback,
-                   let embedded = EmbeddedMetadata.read(
-                       fileURL: URL(fileURLWithPath: file.path),
-                       format: file.format
-                   )
-                {
-                    if embedded.title.isEmpty {
-                        // Pas de titre embarqué : on garde le titre de repli du nom
-                        // de fichier, mais on récupère ISBN/DOI/auteur trouvés.
-                        var merged = embedded
-                        merged.title = guess.title
-                        merged.confidence = .fallback
-                        guess = merged
-                    } else {
-                        guess = embedded
-                    }
-                }
+                let guess = Self.mechanicalGuess(
+                    fileName: file.fileName,
+                    fileURL: URL(fileURLWithPath: file.path),
+                    format: file.format
+                )
 
                 let isDuplicate = duplicatePaths.contains(file.path)
                 // Un étage n'emporte la reconnaissance que s'il fournit titre ET auteur.

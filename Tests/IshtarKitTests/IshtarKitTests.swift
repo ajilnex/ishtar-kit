@@ -371,6 +371,60 @@ struct IngestTests {
         let philoId = try #require(collections.first?.id)
         #expect(membership.values.contains { $0.contains(philoId) })
     }
+
+    @Test("repropose rejoue l'entonnoir sans rien écrire")
+    func repropose() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-repropose-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("contenu de test".utf8)
+            .write(to: dir.appendingPathComponent("Kant_1781_Critique de la raison pure.txt"))
+
+        let db = try CatalogDatabase(inMemory: ())
+        _ = try Ingestor().ingest(
+            report: LibraryScanner().scan(directory: dir),
+            sourceFolder: dir,
+            into: db
+        )
+
+        let overview = LibraryOverview(db: db)
+        let row = try #require(try await overview.rows().first)
+        let doc = row.document
+
+        // Correction humaine : la fiche s'éloigne de la proposition mécanique.
+        try await CatalogStore(db: db).applyUserEdit(
+            workId: row.work.id,
+            editionId: row.edition?.id,
+            documentId: doc.id,
+            edit: RecordEdit(title: "Titre corrigé", authors: ["Humain"])
+        )
+
+        // Rejouer l'entonnoir retrouve la proposition d'origine.
+        let guess = try await Ingestor().repropose(documentId: doc.id, into: db)
+        #expect(guess?.title == "Critique de la raison pure")
+        #expect(guess?.author == "Kant")
+        #expect(guess?.year == "1781")
+
+        // Preuve de non-écriture : la fiche corrigée est intacte, statut et
+        // confiance inchangés, aucun enregistrement créé ni supprimé.
+        let after = try #require(try await overview.rows().first)
+        #expect(after.work.title == "Titre corrigé")
+        #expect(after.authors == ["Humain"])
+        #expect(after.document.curationStatus == .recognized)
+        #expect(after.work.confidence == .high)
+
+        let works = try await db.pool.read { try Work.fetchCount($0) }
+        let editions = try await db.pool.read { try Edition.fetchCount($0) }
+        let documents = try await db.pool.read { try Document.fetchCount($0) }
+        #expect(works == 1)
+        #expect(editions == 1)
+        #expect(documents == 1)
+
+        // Document inconnu : nil, toujours sans écriture.
+        let missing = try await Ingestor().repropose(documentId: UUID(), into: db)
+        #expect(missing == nil)
+    }
 }
 
 // MARK: - Étage 2 : métadonnées embarquées
