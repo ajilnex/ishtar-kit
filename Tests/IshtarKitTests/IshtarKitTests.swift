@@ -800,3 +800,38 @@ struct LibraryArchiveTests {
         }
     }
 }
+
+// MARK: - Étage 3 : connecteur Crossref
+
+@Suite("Entonnoir — étage 3 : connecteur Crossref (décodage pur)")
+struct CrossrefConnectorTests {
+    /// Extrait réaliste d'une réponse /works : aucun réseau, on teste `parse`.
+    static let worksJSON = Data("""
+    {"status":"ok","message":{"DOI":"10.1017/cbo9780511806223","ISBN":["978-0-521-58836-1"],"title":["Moses the Egyptian"],"author":[{"given":"Jan","family":"Assmann"},{"family":"Collectif"}],"issued":{"date-parts":[[1997,3]]},"publisher":"Cambridge University Press","language":"en"}}
+    """.utf8)
+
+    @Test("Décode titre, auteurs, année, éditeur, langue, ISBN-13 et DOI")
+    func decodeReponseComplete() throws {
+        let guess = try #require(CrossrefConnector.parse(worksResponse: Self.worksJSON))
+        #expect(guess.title == "Moses the Egyptian")
+        #expect(guess.author == "Jan Assmann ; Collectif")
+        #expect(guess.year == "1997")
+        #expect(guess.publisher == "Cambridge University Press")
+        #expect(guess.language == "en")
+        #expect(guess.isbn13 == "9780521588361")
+        #expect(guess.doi == "10.1017/cbo9780511806223")
+        #expect(guess.confidence == .structured)
+    }
+
+    @Test("Sans titre : aucune proposition")
+    func sansTitreRendNil() {
+        let json = Data(#"{"message":{"publisher":"Cambridge University Press"}}"#.utf8)
+        #expect(CrossrefConnector.parse(worksResponse: json) == nil)
+    }
+
+    @Test("Données non-JSON : aucune proposition")
+    func nonJSONRendNil() {
+        let json = Data("ceci n'est pas du JSON".utf8)
+        #expect(CrossrefConnector.parse(worksResponse: json) == nil)
+    }
+}
