@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreText
 import Foundation
 import PDFKit
 import Testing
@@ -966,5 +968,96 @@ struct CitationFormatterTests {
         let a = CitationRecord(title: "Alpha", authors: ["Jan Assmann"], year: "1997")
         let b = CitationRecord(title: "Beta", authors: ["Aleida Assmann"], year: "1999")
         #expect(CitationFormatter.bibtex([a, b]).contains("}\n\n@book{"))
+    }
+}
+
+// MARK: - OCR à la demande
+
+@Suite("OCR — PDF muet reconnu à la demande")
+struct OCRTests {
+    /// Fabrique un PDF-image (aucune couche texte) : un bitmap blanc où le texte
+    /// est dessiné en Core Text, puis inséré comme image dans une page PDF.
+    private func makeImagePDF(at url: URL, text: String) {
+        let width = 800, height = 300
+        let box = CGRect(x: 0, y: 0, width: width, height: height)
+        guard let bitmap = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return }
+        // Fond blanc, puis texte noir grand format.
+        bitmap.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        bitmap.fill(box)
+        bitmap.setFillColor(CGColor(gray: 0, alpha: 1))
+        let font = CTFontCreateWithName("Helvetica" as CFString, 72, nil)
+        let attributes = [kCTFontAttributeName: font] as CFDictionary
+        let attributed = CFAttributedStringCreate(nil, text as CFString, attributes)!
+        let line = CTLineCreateWithAttributedString(attributed)
+        bitmap.textPosition = CGPoint(x: 40, y: 120)
+        CTLineDraw(line, bitmap)
+        guard let image = bitmap.makeImage() else { return }
+
+        var mediaBox = box
+        guard let pdf = CGContext(url as CFURL, mediaBox: &mediaBox, nil) else { return }
+        pdf.beginPDFPage(nil)
+        pdf.draw(image, in: box)
+        pdf.endPDFPage()
+        pdf.closePDF()
+    }
+
+    @Test("Un scan muet est OCRisé à la demande : pages écrites, needsOCR éteint")
+    func ocrOnDemand() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ishtar-ocr-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let pdfURL = tmp.appendingPathComponent("scan.pdf")
+        makeImagePDF(at: pdfURL, text: "ISHTAR 1799")
+
+        let db = try CatalogDatabase(inMemory: ())
+        let work = Work(title: "Scan muet")
+        let edition = Edition(workId: work.id)
+        let document = Document(
+            editionId: edition.id,
+            filePath: pdfURL.path,
+            originalFileName: "scan.pdf",
+            fileSize: 0,
+            format: .pdf
+        )
+        try await db.pool.write { conn in
+            try work.insert(conn)
+            try edition.insert(conn)
+            try document.insert(conn)
+        }
+
+        // Précondition : l'extraction ordinaire le juge scanné (needsOCR, zéro page).
+        try await ExtractionPipeline().extract(documentId: document.id, into: db)
+        let afterExtract = try await db.pool.read { conn -> (Document?, Int) in
+            let doc = try Document.fetchOne(conn, key: document.id)
+            let count = try Int.fetchOne(conn, sql:
+                "SELECT COUNT(*) FROM document_page WHERE documentId = ?",
+                arguments: [document.id]) ?? 0
+            return (doc, count)
+        }
+        #expect(afterExtract.0?.needsOCR == true)
+        #expect(afterExtract.1 == 0)
+
+        // OCR à la demande.
+        let pages = try await OCRExtractor().extract(documentId: document.id, into: db)
+        #expect(pages == 1)
+
+        let afterOCR = try await db.pool.read { conn -> (Document?, String?) in
+            let doc = try Document.fetchOne(conn, key: document.id)
+            let content = try String.fetchOne(conn, sql: """
+                SELECT content FROM document_page WHERE documentId = ? AND pageNumber = 1
+                """, arguments: [document.id])
+            return (doc, content)
+        }
+        #expect(afterOCR.0?.needsOCR == false)
+        #expect(afterOCR.0?.isTextExtracted == true)
+        let content = try #require(afterOCR.1).uppercased()
+        #expect(content.contains("ISHTAR"))
+        #expect(content.contains("1799"))
     }
 }
