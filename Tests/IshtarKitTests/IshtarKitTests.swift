@@ -908,6 +908,80 @@ struct GoogleBooksConnectorTests {
     }
 }
 
+// MARK: - Étage 3 : connecteur BnF SRU
+
+@Suite("Entonnoir — étage 3 : connecteur BnF SRU (décodage pur)")
+struct BnFConnectorTests {
+    /// Extrait réaliste d'une réponse SRU (Dublin Core) : aucun réseau.
+    static let sruXML = Data("""
+    <?xml version="1.0" encoding="UTF-8"?>
+    <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+      <srw:numberOfRecords>1</srw:numberOfRecords>
+      <srw:records>
+        <srw:record>
+          <srw:recordData>
+            <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+                       xmlns:dc="http://purl.org/dc/elements/1.1/">
+              <dc:title>La Cité antique</dc:title>
+              <dc:creator>Fustel de Coulanges, Numa Denis (1830-1889)</dc:creator>
+              <dc:publisher>Flammarion</dc:publisher>
+              <dc:date>2009</dc:date>
+              <dc:language>fre</dc:language>
+            </oai_dc:dc>
+          </srw:recordData>
+        </srw:record>
+      </srw:records>
+    </srw:searchRetrieveResponse>
+    """.utf8)
+
+    @Test("Décode titre, auteur (ordre naturel), année, éditeur, langue, ISBN-13")
+    func decodeReponseComplete() throws {
+        let guess = try #require(
+            BnFConnector.parse(sruResponse: Self.sruXML, isbn: "9782081218383"))
+        #expect(guess.title == "La Cité antique")
+        #expect(guess.author == "Numa Denis Fustel de Coulanges")
+        #expect(guess.year == "2009")
+        #expect(guess.publisher == "Flammarion")
+        #expect(guess.language == "fre")
+        #expect(guess.isbn13 == "9782081218383")
+        #expect(guess.confidence == .structured)
+    }
+
+    @Test("Zéro notice : aucune proposition")
+    func numberOfRecordsZeroRendNil() {
+        let xml = Data("""
+        <?xml version="1.0" encoding="UTF-8"?>
+        <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+          <srw:numberOfRecords>0</srw:numberOfRecords>
+          <srw:records></srw:records>
+        </srw:searchRetrieveResponse>
+        """.utf8)
+        #expect(BnFConnector.parse(sruResponse: xml, isbn: "9782081218383") == nil)
+    }
+
+    @Test("Sans dc:title : aucune proposition")
+    func sansTitreRendNil() {
+        let xml = Data("""
+        <?xml version="1.0" encoding="UTF-8"?>
+        <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+          <srw:numberOfRecords>1</srw:numberOfRecords>
+          <srw:records>
+            <srw:record>
+              <srw:recordData>
+                <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+                           xmlns:dc="http://purl.org/dc/elements/1.1/">
+                  <dc:creator>Fustel de Coulanges, Numa Denis (1830-1889)</dc:creator>
+                  <dc:publisher>Flammarion</dc:publisher>
+                </oai_dc:dc>
+              </srw:recordData>
+            </srw:record>
+          </srw:records>
+        </srw:searchRetrieveResponse>
+        """.utf8)
+        #expect(BnFConnector.parse(sruResponse: xml, isbn: "9782081218383") == nil)
+    }
+}
+
 @Suite("Citation express — formats")
 struct CitationFormatterTests {
     /// Fixture principale : une monographie à deux auteurs.
