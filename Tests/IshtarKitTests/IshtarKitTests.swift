@@ -869,3 +869,66 @@ struct OpenLibraryConnectorTests {
         #expect(OpenLibraryConnector.parse(booksResponse: json, isbn: "9780674727779") == nil)
     }
 }
+
+@Suite("Citation express — formats")
+struct CitationFormatterTests {
+    /// Fixture principale : une monographie à deux auteurs.
+    let moses = CitationRecord(
+        title: "Moses the Egyptian",
+        authors: ["Jan Assmann", "Aleida Assmann"],
+        year: "1997",
+        publisher: "Harvard University Press",
+        isbn13: "9780521588361")
+
+    @Test("Chicago auteur-date : format exact")
+    func chicagoExact() {
+        #expect(CitationFormatter.cite(moses, style: .chicagoAuthorDate)
+            == "Assmann, Jan, and Aleida Assmann. 1997. Moses the Egyptian. Harvard University Press.")
+    }
+
+    @Test("ISO 690 : format exact")
+    func iso690Exact() {
+        #expect(CitationFormatter.cite(moses, style: .iso690)
+            == "ASSMANN, Jan ; ASSMANN, Aleida. Moses the Egyptian. Harvard University Press, 1997. ISBN 9780521588361.")
+    }
+
+    @Test("bibtexEntry : clé, en-tête et champ auteur")
+    func bibtexEntryComplet() {
+        let entry = CitationFormatter.bibtexEntry(moses)
+        #expect(entry.contains("@book{assmann1997,"))
+        #expect(entry.contains("author = {Jan Assmann and Aleida Assmann},"))
+    }
+
+    @Test("bibtexEntry : fixture minimale, clé de repli sur le titre + sd")
+    func bibtexEntryMinimal() {
+        let record = CitationRecord(title: "Moses the Egyptian")
+        let entry = CitationFormatter.bibtexEntry(record)
+        #expect(entry.contains("@book{mosessd,"))
+        #expect(!entry.contains("author"))
+        #expect(!entry.contains("year"))
+        #expect(!entry.contains("publisher"))
+        #expect(!entry.contains("isbn"))
+    }
+
+    @Test("cslJSON : type, auteurs et année décodés")
+    func cslJSONDecode() throws {
+        let data = try CitationFormatter.cslJSON([moses])
+        let array = try #require(
+            JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let item = try #require(array.first)
+        #expect(item["type"] as? String == "book")
+        let authors = try #require(item["author"] as? [[String: Any]])
+        #expect(authors[0]["family"] as? String == "Assmann")
+        #expect(authors[0]["given"] as? String == "Jan")
+        let issued = try #require(item["issued"] as? [String: Any])
+        let dateParts = try #require(issued["date-parts"] as? [[Int]])
+        #expect(dateParts == [[1997]])
+    }
+
+    @Test("bibtex : ligne vide entre deux entrées")
+    func bibtexSeparateur() {
+        let a = CitationRecord(title: "Alpha", authors: ["Jan Assmann"], year: "1997")
+        let b = CitationRecord(title: "Beta", authors: ["Aleida Assmann"], year: "1999")
+        #expect(CitationFormatter.bibtex([a, b]).contains("}\n\n@book{"))
+    }
+}
