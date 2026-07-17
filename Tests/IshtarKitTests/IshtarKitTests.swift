@@ -681,6 +681,83 @@ struct CatalogStoreTests {
             #expect(keptA.editionId == editionA.id)
         }
     }
+
+    @Test("Une proposition de catalogue validée écrit reconnu/probable, jamais par-dessus la main humaine")
+    func applyProposal() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+
+        let work = Work(title: "Titre brut", curationStatus: .needsReview, confidence: .low)
+        let edition = Edition(workId: work.id, curationStatus: .needsReview, confidence: .low)
+        let document = Document(
+            editionId: edition.id,
+            filePath: "/tmp/moses.pdf",
+            originalFileName: "moses.pdf",
+            fileSize: 10,
+            format: .pdf,
+            curationStatus: .needsReview,
+            confidence: .low
+        )
+        try await db.pool.write { conn in
+            try work.insert(conn)
+            try edition.insert(conn)
+            try document.insert(conn)
+        }
+
+        // Proposition validée : étage 3 → reconnu / probable sur les trois niveaux.
+        try await CatalogStore(db: db).applyProposal(
+            workId: work.id,
+            editionId: edition.id,
+            documentId: document.id,
+            title: "Moses the Egyptian",
+            authors: ["Jan Assmann"],
+            year: "1997",
+            publisher: "Harvard University Press",
+            language: nil,
+            isbn13: "9780674587397",
+            doi: nil
+        )
+
+        let overview = LibraryOverview(db: db)
+        let after = try #require(try await overview.rows().first)
+        #expect(after.work.title == "Moses the Egyptian")
+        #expect(after.authors == ["Jan Assmann"])
+        #expect(after.edition?.year == "1997")
+        #expect(after.edition?.isbn13 == "9780674587397")
+        #expect(after.work.curationStatus == .recognized)
+        #expect(after.edition?.curationStatus == .recognized)
+        #expect(after.document.curationStatus == .recognized)
+        #expect(after.work.confidence == .probable)
+        #expect(after.edition?.confidence == .probable)
+        #expect(after.document.confidence == .probable)
+
+        // La correction humaine passe en confiance haute.
+        try await CatalogStore(db: db).applyUserEdit(
+            workId: work.id,
+            editionId: edition.id,
+            documentId: document.id,
+            edit: RecordEdit(title: "Ma vérité", authors: ["Jan Assmann"])
+        )
+
+        // Une nouvelle proposition ne doit RIEN écraser : la main humaine prime.
+        try await CatalogStore(db: db).applyProposal(
+            workId: work.id,
+            editionId: edition.id,
+            documentId: document.id,
+            title: "Autre chose",
+            authors: ["Quelqu'un d'autre"],
+            year: "2000",
+            publisher: "Ailleurs",
+            language: nil,
+            isbn13: "9780000000000",
+            doi: nil
+        )
+
+        let final = try #require(try await overview.rows().first)
+        #expect(final.work.title == "Ma vérité")
+        #expect(final.work.confidence == .high)
+        #expect(final.edition?.confidence == .high)
+        #expect(final.document.confidence == .high)
+    }
 }
 
 // MARK: - Archive — export/import de bibliothèque

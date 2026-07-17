@@ -96,6 +96,75 @@ public struct CatalogStore: Sendable {
         }
     }
 
+    /// WP-02e — Applique une proposition d'un catalogue public VALIDÉE par
+    /// l'utilisateur : étage 3 de l'entonnoir → statut « reconnu », confiance
+    /// « probable » (jamais haute : elle reste réservée à la correction humaine).
+    /// Ne touche jamais un document déjà en confiance haute (protection par
+    /// construction). `authors` : noms séparés par « ; » dans `proposal.author`.
+    public func applyProposal(workId: UUID, editionId: UUID?, documentId: UUID,
+                              title: String, authors: [String], year: String?,
+                              publisher: String?, language: String?,
+                              isbn13: String?, doi: String?) async throws {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty else {
+            throw DatabaseError(message: "Le titre ne peut pas être vide.")
+        }
+
+        try await db.pool.write { conn in
+            // Protection : document introuvable ou déjà en main humaine → rien.
+            guard let document = try Document.fetchOne(conn, key: documentId),
+                  document.confidence != .high
+            else { return }
+
+            guard var work = try Work.fetchOne(conn, key: workId) else {
+                throw DatabaseError(message: "Œuvre introuvable.")
+            }
+            work.title = cleanTitle
+            work.curationStatus = .recognized
+            work.confidence = .probable
+            try work.update(conn)
+
+            // Auteurs : remplacement complet de l'attribution.
+            try WorkCreator
+                .filter(Column("workId") == workId && Column("role") == CreatorRole.author.rawValue)
+                .deleteAll(conn)
+            for (position, name) in authors.enumerated() {
+                let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !cleanName.isEmpty else { continue }
+                let creator: Creator
+                if let existing = try Creator.filter(Column("name") == cleanName).fetchOne(conn) {
+                    creator = existing
+                } else {
+                    creator = Creator(name: cleanName)
+                    try creator.insert(conn)
+                }
+                try WorkCreator(workId: workId, creatorId: creator.id, role: .author, position: position)
+                    .insert(conn, onConflict: .ignore)
+            }
+            // Ramasse-miettes : créateurs qui n'attribuent plus rien.
+            try conn.execute(sql: """
+                DELETE FROM creator WHERE id NOT IN (SELECT creatorId FROM work_creator)
+                    AND id NOT IN (SELECT creatorId FROM edition_creator)
+                """)
+
+            if let editionId, var edition = try Edition.fetchOne(conn, key: editionId) {
+                edition.year = normalized(year)
+                edition.publisher = normalized(publisher)
+                edition.language = normalized(language)
+                edition.isbn13 = normalized(isbn13)
+                edition.doi = normalized(doi)
+                edition.curationStatus = .recognized
+                edition.confidence = .probable
+                try edition.update(conn)
+            }
+
+            var doc = document
+            doc.curationStatus = .recognized
+            doc.confidence = .probable
+            try doc.update(conn)
+        }
+    }
+
     /// Change le statut de curation (par ex. « Ignorer », « Marquer reconnu »)
     /// sur le document et son œuvre, sans toucher aux métadonnées.
     public func setStatus(_ status: CurationStatus, documentId: UUID) async throws {
