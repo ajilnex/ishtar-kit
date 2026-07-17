@@ -870,6 +870,42 @@ struct OpenLibraryConnectorTests {
     }
 }
 
+// MARK: - Étage 3 : connecteur Google Books
+
+@Suite("Entonnoir — étage 3 : connecteur Google Books (décodage pur)")
+struct GoogleBooksConnectorTests {
+    /// Extrait réaliste d'une réponse /volumes (q=isbn:…) : aucun réseau.
+    static let volumesJSON = Data("""
+    {"kind":"books#volumes","totalItems":1,"items":[{"volumeInfo":{"title":"La Cité antique","authors":["Numa Denis Fustel de Coulanges"],"publisher":"Flammarion","publishedDate":"2009-01-07","language":"fr","industryIdentifiers":[{"type":"ISBN_13","identifier":"9782081218383"}]}}]}
+    """.utf8)
+
+    @Test("Décode titre, auteur, année, éditeur, langue, ISBN-13 (via industryIdentifiers)")
+    func decodeReponseComplete() throws {
+        // Paramètre isbn à 10 chiffres : force le chemin industryIdentifiers.
+        let guess = try #require(
+            GoogleBooksConnector.parse(volumesResponse: Self.volumesJSON, isbn: "2081218380"))
+        #expect(guess.title == "La Cité antique")
+        #expect(guess.author == "Numa Denis Fustel de Coulanges")
+        #expect(guess.year == "2009")
+        #expect(guess.publisher == "Flammarion")
+        #expect(guess.language == "fr")
+        #expect(guess.isbn13 == "9782081218383")
+        #expect(guess.confidence == .structured)
+    }
+
+    @Test("Aucun volume : aucune proposition")
+    func totalItemsZeroRendNil() {
+        let json = Data(#"{"totalItems":0}"#.utf8)
+        #expect(GoogleBooksConnector.parse(volumesResponse: json, isbn: "9782081218383") == nil)
+    }
+
+    @Test("Sans titre : aucune proposition")
+    func sansTitreRendNil() {
+        let json = Data(#"{"totalItems":1,"items":[{"volumeInfo":{"publisher":"Flammarion"}}]}"#.utf8)
+        #expect(GoogleBooksConnector.parse(volumesResponse: json, isbn: "9782081218383") == nil)
+    }
+}
+
 @Suite("Citation express — formats")
 struct CitationFormatterTests {
     /// Fixture principale : une monographie à deux auteurs.
