@@ -16,9 +16,14 @@ public enum AnnotationAnchor {
     }
 
     /// Repli neutre : sans casse ni diacritiques (même mécanique que la
-    /// vérification des citations du démon).
+    /// vérification des citations du démon), et blancs compactés — un passage
+    /// sélectionné sur plusieurs lignes porte des sauts de ligne que le texte
+    /// extrait espace autrement : l'ancrage ne doit pas s'y perdre.
     private static func fold(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     /// Cherche la citation dans `document_page` : d'abord la page mémorisée,

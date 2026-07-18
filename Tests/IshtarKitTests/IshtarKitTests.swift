@@ -1314,6 +1314,16 @@ struct AnnotationTests {
                 == .found(pageNumber: 3))
     }
 
+    @Test("Ancrage : passage sélectionné sur plusieurs lignes (sauts, césures)")
+    func ancrageMultiligne() async throws {
+        let (db, docId) = try await makeLibrary()
+        // Ce que rend une sélection PDF à cheval sur deux lignes.
+        let annotation = Annotation(documentId: docId, pageNumber: 2,
+                                    quote: "intuitions   sans\nconcepts")
+        #expect(try await AnnotationAnchor.resolve(annotation, in: db)
+                == .found(pageNumber: 2))
+    }
+
     @Test("Ancrage : passage disparu du texte — perdu, jamais faussement placé")
     func ancragePerdu() async throws {
         let (db, docId) = try await makeLibrary()
