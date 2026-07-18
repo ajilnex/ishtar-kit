@@ -1346,3 +1346,124 @@ struct AnnotationTests {
         #expect(try await store.count() == 0)
     }
 }
+
+@Suite("Annotations PDF existantes — import")
+struct PDFAnnotationImportTests {
+    /// Un PDF d'une page portant une vraie couche texte (Core Text dans un
+    /// contexte PDF), puis un surlignement PDF standard sur un mot.
+    /// PDFKit ne réécrit pas fiablement un document en place (le fichier reste
+    /// mappé) : on dépose d'abord la couche texte à côté, puis on écrit la
+    /// version annotée à l'emplacement demandé.
+    private func makeAnnotatedPDF(at url: URL, text: String, highlighting word: String?) {
+        let plain = url.deletingLastPathComponent()
+            .appendingPathComponent("couche-texte-\(UUID().uuidString).pdf")
+        let box = CGRect(x: 0, y: 0, width: 600, height: 200)
+        var mediaBox = box
+        guard let pdf = CGContext(plain as CFURL, mediaBox: &mediaBox, nil) else { return }
+        pdf.beginPDFPage(nil)
+        let font = CTFontCreateWithName("Helvetica" as CFString, 18, nil)
+        let attributed = CFAttributedStringCreate(nil, text as CFString,
+                                                  [kCTFontAttributeName: font] as CFDictionary)!
+        let line = CTLineCreateWithAttributedString(attributed)
+        pdf.textPosition = CGPoint(x: 30, y: 100)
+        CTLineDraw(line, pdf)
+        pdf.endPDFPage()
+        pdf.closePDF()
+
+        // Puis on pose un surlignement PDF standard sur le mot, comme le ferait Aperçu.
+        guard let document = PDFDocument(url: plain) else { return }
+        if let word, let page = document.page(at: 0),
+           let selection = document.findString(word, withOptions: .caseInsensitive).first
+        {
+            let annotation = PDFAnnotation(bounds: selection.bounds(for: page),
+                                           forType: .highlight, withProperties: nil)
+            annotation.contents = "Note d'origine"
+            page.addAnnotation(annotation)
+        }
+        document.write(to: url)
+        try? FileManager.default.removeItem(at: plain)
+    }
+
+    /// Un document PDF vide dans une base en mémoire (gabarit d'AnnotationTests).
+    private func makeLibrary(filePath: String) async throws -> (CatalogDatabase, UUID) {
+        let db = try CatalogDatabase(inMemory: ())
+        let work = Work(title: "Critique de la raison pure")
+        let edition = Edition(workId: work.id)
+        let document = Document(editionId: edition.id, filePath: filePath,
+                                originalFileName: "k.pdf", fileSize: 1, format: .pdf)
+        try await db.pool.write { conn in
+            try work.insert(conn)
+            try edition.insert(conn)
+            try document.insert(conn)
+        }
+        return (db, document.id)
+    }
+
+    @Test("Un surlignement fait ailleurs devient un surlignement Ishtar, ancré par le texte")
+    func surlignementImporte() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let url = tmp.appendingPathComponent("surligne.pdf")
+        makeAnnotatedPDF(at: url, text: "Les intuitions sans concepts sont aveugles.",
+                         highlighting: "intuitions")
+
+        let docId = UUID()
+        let imported = PDFAnnotationImporter().annotations(fromPDFAt: url.path, documentId: docId)
+        #expect(imported.count == 1)
+        let first = try #require(imported.first)
+        #expect(first.quote.lowercased().contains("intuitions"))
+        #expect(first.pageNumber == 1)
+        #expect(first.note == "Note d'origine")
+        #expect(first.documentId == docId)
+        #expect(first.color == nil)
+    }
+
+    @Test("Importer deux fois n'ajoute rien la seconde")
+    func importIdempotent() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let url = tmp.appendingPathComponent("surligne.pdf")
+        makeAnnotatedPDF(at: url, text: "Les intuitions sans concepts sont aveugles.",
+                         highlighting: "intuitions")
+
+        let (db, docId) = try await makeLibrary(filePath: url.path)
+        let importer = PDFAnnotationImporter()
+        let premier = try await importer.importAnnotations(
+            fromPDFAt: url.path, documentId: docId, into: db)
+        #expect(premier == 1)
+        let second = try await importer.importAnnotations(
+            fromPDFAt: url.path, documentId: docId, into: db)
+        #expect(second == 0)
+        #expect(try await AnnotationStore(db: db).count() == 1)
+    }
+
+    @Test("Un PDF sans annotation n'importe rien")
+    func pdfSansAnnotation() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let url = tmp.appendingPathComponent("nu.pdf")
+        makeAnnotatedPDF(at: url, text: "Les intuitions sans concepts sont aveugles.",
+                         highlighting: nil)
+
+        let (db, docId) = try await makeLibrary(filePath: url.path)
+        #expect(PDFAnnotationImporter().annotations(fromPDFAt: url.path, documentId: docId).isEmpty)
+        #expect(try await PDFAnnotationImporter().importAnnotations(
+            fromPDFAt: url.path, documentId: docId, into: db) == 0)
+    }
+
+    @Test("Un fichier absent n'importe rien")
+    func fichierAbsent() {
+        #expect(PDFAnnotationImporter()
+            .annotations(fromPDFAt: "/tmp/inexistant-\(UUID().uuidString).pdf",
+                         documentId: UUID()).isEmpty)
+    }
+}
