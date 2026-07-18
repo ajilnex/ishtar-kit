@@ -145,7 +145,30 @@ public final class CatalogDatabase: Sendable {
             }
         }
 
-        // Les migrations suivantes (embeddings, annotations, liens, artéfacts,
+        // Surlignements persistants de l'utilisateur (M2a). Additive : après v2.
+        migrator.registerMigration("v3_annotations") { db in
+            // Ancrage PAR LE TEXTE (décision d'Aubin 18/07) : la citation exacte
+            // fait foi. La page (PDF) ou le CFI (EPUB) ne sont que des indices de
+            // résolution — le surlignement survit au remplacement du fichier.
+            try db.create(table: "annotation") { t in
+                t.column("id", .text).primaryKey()
+                t.column("documentId", .text).notNull()
+                    .references("document", onDelete: .cascade)
+                    .indexed()
+                t.column("pageNumber", .integer)   // PDF / pages extraites ; nil pour EPUB
+                t.column("cfi", .text)             // EPUB ; nil pour PDF
+                t.column("quote", .text).notNull()
+                t.column("prefix", .text)
+                t.column("suffix", .text)
+                t.column("note", .text)
+                t.column("color", .text)
+                t.column("projectId", .text)       // couches par Projet (réservé, nil en v1)
+                t.column("dateCreated", .datetime).notNull()
+                t.column("dateModified", .datetime).notNull()
+            }
+        }
+
+        // Les migrations suivantes (embeddings, liens, artéfacts,
         // conversations du démon) arrivent avec les jalons M2–M4.
 
         return migrator

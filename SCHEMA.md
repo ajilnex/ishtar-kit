@@ -35,8 +35,8 @@ Ishtar sait dire « je sais », « je crois », « j'ai besoin d'aide » — à 
 - Identifiants : UUID, encodés par GRDB (blob 16 octets). Susceptible de passer en
   texte avant la première release publique — sera documenté ici.
 - Journal WAL. Encodage des dates : format GRDB par défaut.
-- Migrations à venir (M2–M3) : annotations ancrées, liens typés, artéfacts,
-  embeddings (sqlite-vec, dimension par modèle), conversations du démon.
+- Migrations à venir (M2–M3) : liens typés, artéfacts, embeddings
+  (sqlite-vec, dimension par modèle), conversations du démon.
 
 ## Migration v2 — pages extraites et plein texte (WP-03)
 
@@ -53,3 +53,27 @@ Additive, après v1.
   avec `document_page`, colonne indexée `content`, tokenizer `unicode61` avec
   `remove_diacritics 2` : la recherche « Verité » retrouve « vérité ». Classement
   par `bm25`, extraits par `snippet`.
+
+## Migration v3 — surlignements ancrés (M2a)
+
+Additive, après v2. Le **surlignement** est un acte persistant de l'utilisateur —
+à ne pas confondre avec la **mise en surbrillance**, éphémère (voir Vocabulaire,
+`../docs/10-ARCHITECTURE.md`).
+
+- **annotation** — un passage surligné, éventuellement annoté.
+  - `id`, `documentId` → `document(id)` (`ON DELETE CASCADE`, indexé).
+  - **Ancrage PAR LE TEXTE** (décision d'Aubin, 18/07) : `quote` (la citation
+    exacte) fait foi ; `prefix` / `suffix` conservent le contexte pour départager
+    les occurrences. `pageNumber` (PDF) et `cfi` (EPUB) ne sont que des *indices
+    de résolution* — jamais de géométrie seule, si bien que le surlignement
+    survit au remplacement du fichier par une autre édition numérisée.
+  - `note` (libre), `color` (nom de couleur, nul = défaut).
+  - `projectId` : **réservé** aux couches d'annotations par Projet (50-HORIZON) —
+    nul en v1, la colonne existe dès la première migration pour éviter une
+    migration de confort plus tard.
+  - `dateCreated`, `dateModified`.
+- La résolution vit dans `AnnotationAnchor` (pur, testé) : elle cherche la
+  citation dans `document_page` — repli de casse et de diacritiques — et rend
+  `found` (à la page attendue), `moved` (le texte a bougé : le surlignement
+  suit) ou `lost` (passage introuvable : jamais placé au hasard). Un scan muet
+  doit donc être OCRisé avant d'être surligné.

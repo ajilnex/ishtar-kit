@@ -182,6 +182,61 @@ public struct DocumentPage: Codable, Hashable, Sendable, FetchableRecord, Persis
     }
 }
 
+// MARK: - Surlignements
+
+/// Un surlignement PERSISTANT de l'utilisateur (≠ surbrillance éphémère —
+/// Vocabulaire). Ancré par le TEXTE : la citation exacte fait foi, la page ou
+/// le CFI ne sont que des accélérateurs de résolution.
+public struct Annotation: Identifiable, Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "annotation"
+
+    public var id: UUID
+    public var documentId: UUID
+    /// Page mémorisée (PDF / pages extraites) ; nil pour un EPUB.
+    public var pageNumber: Int?
+    /// Position CFI dans l'EPUB ; nil pour un PDF.
+    public var cfi: String?
+    /// La citation exacte : c'est elle qui ancre le surlignement.
+    public var quote: String
+    /// Contexte avant/après la citation, pour départager les occurrences.
+    public var prefix: String?
+    public var suffix: String?
+    public var note: String?
+    public var color: String?
+    /// Couche par Projet (réservé, nil en v1).
+    public var projectId: UUID?
+    public var dateCreated: Date
+    public var dateModified: Date
+
+    public init(
+        id: UUID = UUID(),
+        documentId: UUID,
+        pageNumber: Int? = nil,
+        cfi: String? = nil,
+        quote: String,
+        prefix: String? = nil,
+        suffix: String? = nil,
+        note: String? = nil,
+        color: String? = nil,
+        projectId: UUID? = nil,
+        dateCreated: Date = Date(),
+        dateModified: Date = Date()
+    ) {
+        self.id = id
+        self.documentId = documentId
+        self.pageNumber = pageNumber
+        self.cfi = cfi
+        self.quote = quote
+        self.prefix = prefix
+        self.suffix = suffix
+        self.note = note
+        self.color = color
+        self.projectId = projectId
+        self.dateCreated = dateCreated
+        self.dateModified = dateModified
+    }
+}
+
 // MARK: - Personnes et attributions
 
 public struct Creator: Identifiable, Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {

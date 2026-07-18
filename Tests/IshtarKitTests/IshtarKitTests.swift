@@ -1212,3 +1212,127 @@ struct OCRTests {
         #expect(content.contains("1799"))
     }
 }
+
+// MARK: - Surlignements ancrés (M2a)
+
+@Suite("Surlignements — magasin et ancrage par le texte")
+struct AnnotationTests {
+    /// Un document de trois pages extraites : le terrain d'ancrage.
+    private func makeLibrary() async throws -> (CatalogDatabase, UUID) {
+        let db = try CatalogDatabase(inMemory: ())
+        let work = Work(title: "Critique de la raison pure")
+        let edition = Edition(workId: work.id)
+        let document = Document(editionId: edition.id, filePath: "/tmp/k.pdf",
+                                originalFileName: "k.pdf", fileSize: 1, format: .pdf)
+        try await db.pool.write { conn in
+            try work.insert(conn)
+            try edition.insert(conn)
+            try document.insert(conn)
+            try conn.execute(sql: """
+                INSERT INTO document_page(documentId, pageNumber, content)
+                VALUES (?, 1, 'Kant écrit que la raison pure examine ses limites.'),
+                       (?, 2, 'Les intuitions sans concepts sont aveugles.'),
+                       (?, 3, 'Hegel note que la raison pure se dépasse elle-même.')
+                """, arguments: [document.id, document.id, document.id])
+        }
+        return (db, document.id)
+    }
+
+    @Test("Cycle de vie : ajouter, annoter, colorer, lire dans l'ordre, supprimer")
+    func cycleDeVie() async throws {
+        let (db, docId) = try await makeLibrary()
+        let store = AnnotationStore(db: db)
+
+        // Ajoutées dans le désordre : la lecture les rend dans l'ordre des pages.
+        let seconde = try await store.add(
+            Annotation(documentId: docId, pageNumber: 2, quote: "intuitions sans concepts"))
+        _ = try await store.add(
+            Annotation(documentId: docId, pageNumber: 1, quote: "la raison pure"))
+        #expect(try await store.count() == 2)
+
+        let inOrder = try await store.annotations(documentId: docId)
+        #expect(inOrder.map(\.pageNumber) == [1, 2])
+
+        try await store.updateNote(id: seconde.id, note: "À rapprocher de l'esthétique.")
+        try await store.setColor(id: seconde.id, color: "jaune")
+        let annotated = try #require(
+            try await store.annotations(documentId: docId).first { $0.id == seconde.id })
+        #expect(annotated.note == "À rapprocher de l'esthétique.")
+        #expect(annotated.color == "jaune")
+        #expect(annotated.dateModified >= annotated.dateCreated)
+        // Réservé aux couches par Projet : nil en v1 (décision d'Aubin 18/07).
+        #expect(annotated.projectId == nil)
+
+        try await store.remove(id: seconde.id)
+        #expect(try await store.count() == 1)
+    }
+
+    @Test("Ancrage : la citation retrouvée à sa page mémorisée")
+    func ancrageTrouve() async throws {
+        let (db, docId) = try await makeLibrary()
+        let annotation = Annotation(documentId: docId, pageNumber: 2,
+                                    quote: "intuitions sans concepts")
+        #expect(try await AnnotationAnchor.resolve(annotation, in: db)
+                == .found(pageNumber: 2))
+    }
+
+    @Test("Ancrage : casse et diacritiques repliées, la citation reste trouvée")
+    func ancrageReplie() async throws {
+        let (db, docId) = try await makeLibrary()
+        let annotation = Annotation(documentId: docId, pageNumber: 2,
+                                    quote: "INTUITIONS SANS CONCEPTS")
+        #expect(try await AnnotationAnchor.resolve(annotation, in: db)
+                == .found(pageNumber: 2))
+    }
+
+    @Test("Ancrage : fichier remplacé — la citation a changé de page, elle est suivie")
+    func ancrageDeplace() async throws {
+        let (db, docId) = try await makeLibrary()
+        // La page mémorisée (1) ne porte plus la citation : elle est page 2.
+        let annotation = Annotation(documentId: docId, pageNumber: 1,
+                                    quote: "intuitions sans concepts")
+        #expect(try await AnnotationAnchor.resolve(annotation, in: db)
+                == .moved(from: 1, to: 2))
+    }
+
+    @Test("Ancrage : sans page mémorisée (EPUB), la citation seule suffit")
+    func ancrageSansPage() async throws {
+        let (db, docId) = try await makeLibrary()
+        let annotation = Annotation(documentId: docId, cfi: "/6/4!/2/10",
+                                    quote: "intuitions sans concepts")
+        #expect(try await AnnotationAnchor.resolve(annotation, in: db)
+                == .found(pageNumber: 2))
+    }
+
+    @Test("Ancrage : deux pages portent la citation, le contexte départage")
+    func ancrageContexte() async throws {
+        let (db, docId) = try await makeLibrary()
+        // « la raison pure » est pages 1 ET 3 ; le contexte désigne la 3.
+        let annotation = Annotation(documentId: docId, quote: "la raison pure",
+                                    prefix: "Hegel note que ", suffix: " se dépasse")
+        #expect(try await AnnotationAnchor.resolve(annotation, in: db)
+                == .found(pageNumber: 3))
+    }
+
+    @Test("Ancrage : passage disparu du texte — perdu, jamais faussement placé")
+    func ancragePerdu() async throws {
+        let (db, docId) = try await makeLibrary()
+        let annotation = Annotation(documentId: docId, pageNumber: 1,
+                                    quote: "le noumène chevauche le phénomène")
+        #expect(try await AnnotationAnchor.resolve(annotation, in: db) == .lost)
+    }
+
+    @Test("Supprimer un document emporte ses surlignements (cascade)")
+    func cascade() async throws {
+        let (db, docId) = try await makeLibrary()
+        let store = AnnotationStore(db: db)
+        _ = try await store.add(Annotation(documentId: docId, pageNumber: 1,
+                                           quote: "la raison pure"))
+        #expect(try await store.count() == 1)
+
+        _ = try await db.pool.write { conn in
+            try Document.deleteOne(conn, key: docId)
+        }
+        #expect(try await store.count() == 0)
+    }
+}
