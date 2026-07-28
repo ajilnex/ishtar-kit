@@ -70,9 +70,18 @@ public struct OpenAICompatibleClient: LLMClient {
                 var m: [String: Any] = ["role": message.role.rawValue,
                                         "content": message.content]
                 if !message.toolCalls.isEmpty {
-                    m["tool_calls"] = message.toolCalls.map { call in
-                        ["id": call.id, "type": "function",
-                         "function": ["name": call.name, "arguments": call.argumentsJSON]]
+                    m["tool_calls"] = message.toolCalls.map { call -> [String: Any] in
+                        var payload: [String: Any] = [
+                            "id": call.id, "type": "function",
+                            "function": ["name": call.name,
+                                         "arguments": call.argumentsJSON],
+                        ]
+                        // Gemini 3 rejette (400) un appel rendu sans sa signature.
+                        if let signature = call.thoughtSignature {
+                            payload["extra_content"] =
+                                ["google": ["thought_signature": signature]]
+                        }
+                        return payload
                     }
                 }
                 if let id = message.toolCallID { m["tool_call_id"] = id }
@@ -112,6 +121,7 @@ public struct OpenAIStreamAccumulator {
         var id: String = ""
         var name: String = ""
         var arguments: String = ""
+        var thoughtSignature: String?
     }
 
     private var calls: [Int: PartialCall] = [:]
@@ -127,17 +137,31 @@ public struct OpenAIStreamAccumulator {
 
         if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
             for fragment in toolCalls {
-                let index = fragment["index"] as? Int ?? 0
+                // OpenAI fragmente ses appels et les numérote ; Gemini livre des
+                // appels complets sans `index`. Sans numéro, chaque fragment ouvre
+                // donc un appel neuf : un repli sur 0 fusionnait les appels
+                // parallèles de Gemini en un seul, au nom et au JSON concaténés.
+                let index = fragment["index"] as? Int ?? ((calls.keys.max() ?? -1) + 1)
                 var call = calls[index] ?? PartialCall()
                 if let id = fragment["id"] as? String { call.id += id }
                 if let function = fragment["function"] as? [String: Any] {
                     if let name = function["name"] as? String { call.name += name }
                     if let args = function["arguments"] as? String { call.arguments += args }
                 }
+                if let signature = Self.thoughtSignature(in: fragment) {
+                    call.thoughtSignature = signature
+                }
                 calls[index] = call
             }
         }
         return delta["content"] as? String
+    }
+
+    /// `extra_content.google.thought_signature`, tel que Gemini 3 l'émet.
+    private static func thoughtSignature(in fragment: [String: Any]) -> String? {
+        guard let extra = fragment["extra_content"] as? [String: Any],
+              let google = extra["google"] as? [String: Any] else { return nil }
+        return google["thought_signature"] as? String
     }
 
     public func finalizedToolCalls() -> [LLMToolCall] {
@@ -146,7 +170,8 @@ public struct OpenAIStreamAccumulator {
             return LLMToolCall(
                 id: call.id.isEmpty ? UUID().uuidString : call.id,
                 name: call.name,
-                argumentsJSON: call.arguments.isEmpty ? "{}" : call.arguments)
+                argumentsJSON: call.arguments.isEmpty ? "{}" : call.arguments,
+                thoughtSignature: call.thoughtSignature)
         }
     }
 }

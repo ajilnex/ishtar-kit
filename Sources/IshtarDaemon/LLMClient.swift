@@ -29,11 +29,16 @@ public struct LLMToolCall: Sendable, Equatable {
     public var name: String
     /// Arguments, JSON brut tel que produit par le modèle.
     public var argumentsJSON: String
+    /// Jeton opaque que Gemini 3 attache à chaque appel et exige de retrouver au
+    /// tour suivant, sinon 400. Transporté tel quel, jamais interprété.
+    public var thoughtSignature: String?
 
-    public init(id: String, name: String, argumentsJSON: String) {
+    public init(id: String, name: String, argumentsJSON: String,
+                thoughtSignature: String? = nil) {
         self.id = id
         self.name = name
         self.argumentsJSON = argumentsJSON
+        self.thoughtSignature = thoughtSignature
     }
 }
 

@@ -85,6 +85,144 @@ struct StreamAccumulatorTests {
         #expect(calls[0].argumentsJSON == #"{"query":"kant"}"#)
         #expect(calls[0].id == "call_1")
     }
+
+    @Test("Appels parallèles sans `index` (Gemini) restent distincts, signatures portées")
+    func parallelCallsWithoutIndex() {
+        var acc = OpenAIStreamAccumulator()
+
+        // Gemini livre ses appels déjà complets, dans un seul delta, sans `index`
+        // et chacun avec sa signature de pensée.
+        let event = #"""
+        {"choices":[{"delta":{"tool_calls":[
+          {"id":"c1","type":"function","function":{"name":"search_library","arguments":"{\"query\":\"Sumer\"}"},"extra_content":{"google":{"thought_signature":"SIG-1"}}},
+          {"id":"c2","type":"function","function":{"name":"library_stats","arguments":"{}"},"extra_content":{"google":{"thought_signature":"SIG-2"}}}
+        ]}}]}
+        """#
+        _ = acc.ingest(json: Data(event.utf8))
+
+        let calls = acc.finalizedToolCalls()
+        #expect(calls.count == 2)
+        #expect(calls[0].name == "search_library")
+        #expect(calls[0].argumentsJSON == #"{"query":"Sumer"}"#)
+        #expect(calls[0].thoughtSignature == "SIG-1")
+        #expect(calls[1].name == "library_stats")
+        #expect(calls[1].argumentsJSON == "{}")
+        #expect(calls[1].thoughtSignature == "SIG-2")
+    }
+}
+
+@Suite("Démon — corps de requête OpenAI-compatible")
+struct OpenAIRequestBodyTests {
+    @Test("La signature de pensée est rendue au fournisseur (exigence Gemini 3)")
+    func thoughtSignatureIsEchoed() throws {
+        let messages = [
+            LLMMessage(role: .user, content: "Combien de livres ?"),
+            LLMMessage(role: .assistant, content: "", toolCalls: [
+                LLMToolCall(id: "c1", name: "library_stats", argumentsJSON: "{}",
+                            thoughtSignature: "SIG-1"),
+                LLMToolCall(id: "c2", name: "search_library", argumentsJSON: "{}"),
+            ]),
+            LLMMessage(role: .tool, content: #"{"total":1284}"#, toolCallID: "c1"),
+        ]
+
+        let data = try OpenAICompatibleClient.requestBody(
+            model: "gemini-3.6-flash", messages: messages, tools: [])
+        let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let sent = payload?["messages"] as? [[String: Any]]
+        let toolCalls = sent?[1]["tool_calls"] as? [[String: Any]]
+
+        #expect(toolCalls?.count == 2)
+        let google = (toolCalls?[0]["extra_content"] as? [String: Any])?["google"]
+            as? [String: String]
+        #expect(google?["thought_signature"] == "SIG-1")
+        // Sans signature (OpenAI, Mistral, Ollama), aucun champ parasite.
+        #expect(toolCalls?[1].keys.contains("extra_content") == false)
+    }
+}
+
+// MARK: - Fournisseurs : familles, découverte, outillage (purs, sans réseau)
+
+/// Client de test : rend ce qu'on lui dit, sans jamais sortir de la machine.
+private struct StubClient: LLMClient {
+    var toolCalls: [LLMToolCall] = []
+    var fails = false
+
+    func stream(messages: [LLMMessage], tools: [LLMToolSpec])
+        -> AsyncThrowingStream<LLMChunk, Error>
+    {
+        let calls = toolCalls
+        let fails = fails
+        return AsyncThrowingStream { continuation in
+            guard !fails else {
+                continuation.finish(
+                    throwing: DaemonError.provider(status: 500, body: "serveur éteint"))
+                return
+            }
+            continuation.yield(.text("…"))
+            continuation.yield(.finished(toolCalls: calls))
+            continuation.finish()
+        }
+    }
+}
+
+@Suite("Démon — familles de fournisseurs et couture MLX")
+struct ProviderKindTests {
+    @Test("L'adresse décide de la famille ; le local est reconnu comme tel")
+    func inference() throws {
+        let anthropic = URL(string: "https://api.anthropic.com")!
+        let gemini = URL(string: "https://generativelanguage.googleapis.com/v1beta/openai")!
+        let ollama = URL(string: "http://localhost:11434/v1")!
+
+        #expect(ProviderKind.inferred(from: anthropic) == .anthropic)
+        #expect(ProviderKind.inferred(from: gemini) == .openAICompatible)
+        #expect(ProviderKind.inferred(from: ollama) == .openAICompatible)
+
+        #expect(ProviderKind.isLocal(ollama))
+        #expect(ProviderKind.isLocal(URL(string: "http://studio.local:1234/v1")!))
+        #expect(!ProviderKind.isLocal(gemini))
+
+        // La fabrique est la couture : MLX s'y branchera sans toucher au reste.
+        let distant = LLMProviderConfig(baseURL: anthropic, apiKey: "k", model: "m")
+        #expect(try #require(LLMClientFactory.make(config: distant)) is AnthropicClient)
+        let local = LLMProviderConfig(baseURL: ollama, apiKey: nil, model: "qwen3")
+        #expect(try #require(LLMClientFactory.make(config: local)) is OpenAICompatibleClient)
+    }
+}
+
+@Suite("Démon — découverte des modèles d'un serveur")
+struct ModelListingTests {
+    @Test("Les deux formes de réponse sont comprises ; le bruit ne casse rien")
+    func parsing() {
+        let openAI = #"{"data":[{"id":"qwen3:8b"},{"id":"gemma3:4b"}]}"#
+        #expect(ModelListing.parse(Data(openAI.utf8)) == ["gemma3:4b", "qwen3:8b"])
+
+        let ollama = #"{"models":[{"name":"qwen3:8b"},{"name":"llama3.1:8b"}]}"#
+        #expect(ModelListing.parse(Data(ollama.utf8)) == ["llama3.1:8b", "qwen3:8b"])
+
+        #expect(ModelListing.parse(Data("pas du json".utf8)).isEmpty)
+        #expect(ModelListing.parse(Data(#"{"data":[]}"#.utf8)).isEmpty)
+    }
+}
+
+@Suite("Démon — épreuve d'outillage du modèle")
+struct CapabilityProbeTests {
+    @Test("Outillé, bavard, injoignable : trois verdicts distincts")
+    func probe() async {
+        let capable = StubClient(toolCalls: [
+            LLMToolCall(id: "1", name: "ishtar_probe", argumentsJSON: "{}"),
+        ])
+        #expect(await CapabilityProbe.toolSupport(of: capable) == .supported)
+
+        // Un modèle qui répond en prose ne pourra jamais citer la bibliothèque.
+        #expect(await CapabilityProbe.toolSupport(of: StubClient()) == .unsupported)
+
+        // Un serveur éteint reste indéterminé : ne jamais accuser le modèle.
+        guard case .undetermined = await CapabilityProbe.toolSupport(
+            of: StubClient(fails: true)) else {
+            Issue.record("Un serveur injoignable doit rester indéterminé")
+            return
+        }
+    }
 }
 
 // MARK: - Accumulateur SSE Anthropic (pur, sans réseau)
