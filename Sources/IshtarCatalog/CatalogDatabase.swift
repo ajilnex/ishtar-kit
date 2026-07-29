@@ -168,8 +168,34 @@ public final class CatalogDatabase: Sendable {
             }
         }
 
-        // Les migrations suivantes (embeddings, liens, artéfacts,
-        // conversations du démon) arrivent avec les jalons M2–M4.
+        migrator.registerMigration("v4_conversations") { db in
+            // L'historique du démon. On enregistre ce qui a été MONTRÉ, jamais
+            // les jetons propres à un fournisseur (signature de pensée de
+            // Gemini 3…) : un fil ouvert avec un modèle distant doit pouvoir se
+            // poursuivre avec un modèle local.
+            try db.create(table: "conversation") { t in
+                t.column("id", .text).primaryKey()
+                t.column("title", .text)           // dérivé de la première question
+                t.column("dateCreated", .datetime).notNull()
+                t.column("dateModified", .datetime).notNull().indexed()
+            }
+            try db.create(table: "conversation_message") { t in
+                t.column("id", .text).primaryKey()
+                t.column("conversationId", .text).notNull()
+                    .references("conversation", onDelete: .cascade)
+                t.column("position", .integer).notNull()
+                t.column("role", .text).notNull()  // user | assistant | tool
+                t.column("content", .text).notNull()
+                t.column("citationsJSON", .text)   // puces vérifiées, nul si aucune
+                t.column("dateCreated", .datetime).notNull()
+            }
+            try db.create(index: "index_message_on_conversation_position",
+                          on: "conversation_message",
+                          columns: ["conversationId", "position"])
+        }
+
+        // Les migrations suivantes (embeddings, liens, artéfacts) arrivent avec
+        // les jalons M2–M4.
 
         return migrator
     }

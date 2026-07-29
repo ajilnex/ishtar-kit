@@ -77,3 +77,29 @@ Additive, après v2. Le **surlignement** est un acte persistant de l'utilisateur
   `found` (à la page attendue), `moved` (le texte a bougé : le surlignement
   suit) ou `lost` (passage introuvable : jamais placé au hasard). Un scan muet
   doit donc être OCRisé avant d'être surligné.
+
+## Conversations du démon (v4)
+
+L'historique des échanges. On enregistre **ce qui a été montré**, jamais les
+appels d'outils bruts ni les jetons propres à un fournisseur — la signature de
+pensée que Gemini 3 attache à ses appels, par exemple. Ces jetons sont opaques,
+périssables et liés à un fournisseur : les stocker interdirait d'ouvrir un fil
+avec un modèle distant et de le poursuivre avec un modèle local.
+
+- **conversation** — un fil.
+  - `id`, `title` (nul tant que rien n'a été dit ; `ConversationTitle` le dérive
+    de la première question, tronqué sur une frontière de mot).
+  - `dateCreated`, `dateModified` (indexée) : c'est `dateModified` qui ordonne
+    l'historique, si bien que rouvrir un vieux fil le ramène en tête.
+- **conversation_message** — un message tel qu'affiché.
+  - `id`, `conversationId` → `conversation(id)` (`ON DELETE CASCADE`).
+  - `position` : rang dans le fil, calculé par le magasin — l'appelant ne compte
+    jamais lui-même.
+  - `role` : `user`, `assistant` ou `tool` (la fine ligne grise d'un outil).
+  - `content`, `citationsJSON` (puces vérifiées déjà sérialisées, nul si la
+    réponse n'en portait aucune — le moteur ne les interprète pas).
+  - Index `(conversationId, position)` : la relecture d'un fil est le seul accès
+    chaud.
+- `ConversationStore.purgeEmpty()` balaie les fils ouverts puis abandonnés sans
+  un mot : sans ce ménage, chaque « nouvelle conversation » laisserait une
+  coquille dans l'historique.
