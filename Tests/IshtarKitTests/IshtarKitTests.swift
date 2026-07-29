@@ -1467,3 +1467,51 @@ struct PDFAnnotationImportTests {
                          documentId: UUID()).isEmpty)
     }
 }
+
+// MARK: - Localisation d'un passage (pur, sans PDFKit)
+
+@Suite("Passages — retrouver une citation malgré césures et sauts de ligne")
+struct PassageLocatorTests {
+    /// Le texte tel qu'un PDF le rend vraiment : lignes justifiées, mot coupé.
+    private let page = """
+    Concurrently, the cosmic reinscription of Freud's account of the
+    death-drive can terminate the suffi-
+    ciency of capitalist participation for accelerating the disenchanting
+    emancipation harboured by the truth of extinction.
+    """
+
+    @Test("Une phrase coupée par un saut de ligne ET une césure est retrouvée entière")
+    func hyphenAndNewline() throws {
+        let range = try #require(PassageLocator.range(
+            of: "the sufficiency of capitalist participation", in: page))
+        let found = (page as NSString).substring(with: range)
+        #expect(found.hasPrefix("the suffi"))
+        #expect(found.hasSuffix("participation"))
+        // La césure d'origine est bien à l'intérieur de la plage rendue.
+        #expect(found.contains("suffi-"))
+    }
+
+    @Test("La plage cerne la phrase, jamais la page entière")
+    func exactRange() throws {
+        let text = "Avant. La phrase cherchée est ici. Après."
+        let range = try #require(PassageLocator.range(of: "La phrase cherchée est ici.",
+                                                      in: text))
+        #expect((text as NSString).substring(with: range) == "La phrase cherchée est ici.")
+    }
+
+    @Test("Casse et diacritiques repliées ; le trait d'union légitime est préservé")
+    func foldingAndRealHyphen() {
+        let text = "Selon Brassier, la vérité de l'extinction. Le DEATH-DRIVE reste."
+        #expect(PassageLocator.contains("la verite de l'extinction", in: text))
+        // « death-drive » n'est pas une césure : le tiret compte.
+        #expect(PassageLocator.contains("death-drive", in: text))
+        #expect(!PassageLocator.contains("deathdrive", in: text))
+    }
+
+    @Test("Un passage absent n'est pas inventé ; une citation vide non plus")
+    func absent() {
+        #expect(PassageLocator.range(of: "un passage qui n'y est pas", in: page) == nil)
+        #expect(PassageLocator.range(of: "   ", in: page) == nil)
+        #expect(PassageLocator.range(of: "", in: page) == nil)
+    }
+}
