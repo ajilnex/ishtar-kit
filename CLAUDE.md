@@ -4,6 +4,11 @@ Moteur open source (Apache-2.0) d'Ishtar, bibliothèque savante locale-first pou
 les SHS. Le cockpit du projet est dans `../docs/` (dépôt ishtar-docs) : lire
 `10-ARCHITECTURE.md` (invariants) et son WP dans `30-CHANTIERS.md` avant de coder.
 
+**Avant d'ouvrir le moindre fichier : `../docs/45-REGISTRE.md`.** D'autres
+agents travaillent peut-être en ce moment. Lis leurs entrées, n'ouvre aucun
+fichier qu'un autre a réservé, inscris-toi (quatre lignes), et **supprime ton
+entrée en partant** — le registre ne garde que le présent.
+
 Règles dures :
 - Le scan ne touche jamais le réseau ni l'IA ; les dossiers scannés sont en
   lecture seule absolue.
