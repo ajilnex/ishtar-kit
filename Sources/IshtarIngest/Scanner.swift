@@ -59,7 +59,10 @@ public struct LibraryScanner: Sendable {
 
             guard resources.isRegularFile == true else { continue }
 
-            guard let format = DocumentFormat(fileExtension: fileURL.pathExtension) else {
+            // Le nom d'abord, le contenu ensuite : une bibliothèque réelle est
+            // pleine de fichiers mal nommés (EPUB en « .pdf », RTF en « .doc »,
+            // extension absente). Le reniflage ne coûte qu'une lecture d'en-tête.
+            guard let format = FormatDetector.resolve(fileURL: fileURL) else {
                 report.unsupportedCount += 1
                 continue
             }

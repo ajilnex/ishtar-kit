@@ -57,8 +57,10 @@ public struct ExtractionPipeline: Sendable {
         into db: CatalogDatabase,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> Int {
+        // La liste vient du format lui-même : ajouter un format au moteur
+        // l'inscrit ici sans qu'on ait à y penser (un seul pipeline, invariant n° 3).
         let extractableFormats: Set<String> = Set(
-            [DocumentFormat.pdf, .epub, .txt, .md].map(\.rawValue)
+            DocumentFormat.allCases.filter(\.isTextExtractable).map(\.rawValue)
         )
 
         let pending: [UUID] = try await db.pool.read { conn in

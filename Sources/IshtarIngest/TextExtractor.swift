@@ -23,8 +23,12 @@ public struct ExtractedText: Sendable, Equatable {
 }
 
 /// Extraction du texte d'un document, par format, locale et sans réseau
-/// (invariant n° 1). Seuls PDF, EPUB, TXT et MD sont dans le périmètre ; les
-/// autres formats (mobi, azw3, djvu, docx, rtf) sont ignorés proprement (nil).
+/// (invariant n° 1).
+///
+/// Périmètre : tout ce que `DocumentFormat.isTextExtractable` déclare — PDF,
+/// EPUB, la famille MOBI, FB2/FBZ, HTML, DOCX, DOC, ODT, RTF, TXT, MD. Les
+/// formats sans couche texte (CBZ, DJVU) ou verrouillés (KFX) rendent `nil` :
+/// il n'y a rien à indexer, ce n'est pas une erreur.
 public enum TextExtractor {
     /// Seuil moyen de caractères par page en-dessous duquel un PDF est jugé scanné.
     static let scannedPDFThreshold = 50
@@ -38,8 +42,42 @@ public enum TextExtractor {
         case .pdf: extractPDF(fileURL)
         case .epub: extractEPUB(fileURL)
         case .txt, .md: extractPlainText(fileURL)
-        case .mobi, .azw3, .djvu, .docx, .rtf: nil // hors périmètre WP-03
+        case .mobi, .azw3, .azw: extractMOBI(fileURL)
+        case .fb2: paginated(OfficeDocument.fictionBookText(fileURL, zipped: false))
+        case .fbz: paginated(OfficeDocument.fictionBookText(fileURL, zipped: true))
+        case .html: paginated(OfficeDocument.htmlText(fileURL))
+        case .docx: paginated(OfficeDocument.docxText(fileURL))
+        case .odt: paginated(OfficeDocument.odtText(fileURL))
+        case .rtf: paginated(OfficeDocument.rtfText(fileURL))
+        case .doc: paginated(LegacyWordDocument.text(fileURL))
+        // Pas de couche texte (images), ou verrou éditeur : rien à indexer.
+        case .cbz, .djvu, .cbr, .kfx: nil
         }
+    }
+
+    /// Le chemin commun des formats qui rendent un texte d'un seul tenant :
+    /// découpe en pages de taille lisible, numérotées à partir de 1.
+    static func paginated(_ text: String?) -> ExtractedText? {
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let chunks = paginate(text, target: pageTargetLength)
+        guard !chunks.isEmpty else { return nil }
+        return ExtractedText(
+            pages: chunks.enumerated().map {
+                ExtractedPage(number: $0.offset + 1, content: $0.element)
+            },
+            needsOCR: false
+        )
+    }
+
+    // MARK: - Famille MOBI
+
+    /// MOBI, AZW, AZW3 : le décodeur maison rend le balisage du livre ; on n'en
+    /// garde que le texte. Un fichier chiffré rend `nil` — l'app le dira.
+    static func extractMOBI(_ url: URL) -> ExtractedText? {
+        guard let document = try? MOBIDocument(fileURL: url) else { return nil }
+        return paginated(document.plainText)
     }
 
     // MARK: - PDF

@@ -19,12 +19,110 @@ public enum Confidence: String, Codable, CaseIterable, Sendable, DatabaseValueCo
     case low
 }
 
-public enum DocumentFormat: String, Codable, CaseIterable, Sendable, DatabaseValueConvertible {
-    case pdf, epub, mobi, azw3, djvu, txt, md, docx, rtf
+/// Le moteur qui sait AFFICHER un format. Ce n'est pas une préférence : c'est
+/// un constat technique, et la seule chose que le lecteur ait besoin de savoir.
+public enum ReadingEngine: String, Sendable {
+    /// PDFKit (Apple) — pagination, sélection, annotations natives.
+    case pdfKit
+    /// foliate-js (MIT, copie figée) dans la WKWebView au réseau coupé :
+    /// EPUB, MOBI, AZW3/KF8, AZW non protégé, FB2, FBZ, CBZ.
+    case foliate
+    /// Rendu texte maison (TXT, MD) ou texte extrait (DOCX, DOC, RTF, ODT, HTML).
+    case text
+    /// Aucun moteur : le format est fermé (DRM) ou son seul décodeur est sous
+    /// une licence incompatible. Le lecteur le dit, il ne le cache pas.
+    case none
+}
 
+/// Pourquoi Ishtar ne sait pas ouvrir un document. Le lecteur affiche cette
+/// raison telle quelle : jamais « format non géré » tout court.
+public enum UnreadableReason: String, Sendable {
+    /// Verrou éditeur (Kindle KFX, MOBI/AZW chiffré, EPUB Adobe DRM).
+    case drm
+    /// Décodeur existant mais sous licence GPL/propriétaire — interdit dans
+    /// l'app (60-CAP §2 : BSD/MIT/Apache seulement). DJVU, CBR.
+    case licenceIncompatible
+    /// Fichier illisible : tronqué, corrompu, vide.
+    case damaged
+}
+
+public enum DocumentFormat: String, Codable, CaseIterable, Sendable, DatabaseValueConvertible {
+    // Historiques (ne jamais renommer : ce sont des valeurs en base).
+    case pdf, epub, mobi, azw3, djvu, txt, md, docx, rtf
+    // Ajouts du chantier « lecteur polyvalent ».
+    case azw, fb2, fbz, cbz, cbr, kfx, html, doc, odt
+
+    /// Extensions rencontrées dans les bibliothèques réelles, ramenées au
+    /// format canonique. `fb2.zip` est traité en amont (double extension).
+    private static let aliases: [String: DocumentFormat] = [
+        "htm": .html, "xhtml": .html,
+        "markdown": .md, "mdown": .md, "mkd": .md,
+        "prc": .mobi, "pdb": .mobi,
+        "azw4": .pdf,          // AZW4 est un PDF encapsulé Kindle
+        "text": .txt,
+        "djv": .djvu,
+        "fb2z": .fbz,
+    ]
+
+    /// Depuis une extension de fichier. Insensible à la casse, tolérante aux
+    /// variantes (`htm`, `prc`, `markdown`…).
     public init?(fileExtension: String) {
-        self.init(rawValue: fileExtension.lowercased())
+        let ext = fileExtension.lowercased()
+        if let direct = DocumentFormat(rawValue: ext) {
+            self = direct
+        } else if let alias = DocumentFormat.aliases[ext] {
+            self = alias
+        } else {
+            return nil
+        }
     }
+
+    /// Depuis un nom de fichier complet — seul endroit où la double extension
+    /// `.fb2.zip` peut être vue.
+    public init?(fileName: String) {
+        let lower = fileName.lowercased()
+        if lower.hasSuffix(".fb2.zip") {
+            self = .fbz
+            return
+        }
+        self.init(fileExtension: (fileName as NSString).pathExtension)
+    }
+
+    /// Le moteur d'affichage. `none` n'est jamais un aveu vague : il
+    /// s'accompagne toujours d'une `unreadableReason`.
+    public var readingEngine: ReadingEngine {
+        switch self {
+        case .pdf: .pdfKit
+        case .epub, .mobi, .azw3, .azw, .fb2, .fbz, .cbz: .foliate
+        case .txt, .md, .html, .docx, .doc, .rtf, .odt: .text
+        case .djvu, .cbr, .kfx: .none
+        }
+    }
+
+    /// La raison, quand il n'y a pas de moteur. `nil` si le format se lit.
+    /// (Un MOBI chiffré est décidé à l'ouverture, pas ici : c'est une propriété
+    /// du fichier, pas du format.)
+    public var unreadableReason: UnreadableReason? {
+        switch self {
+        case .kfx: .drm
+        case .djvu, .cbr: .licenceIncompatible
+        default: nil
+        }
+    }
+
+    /// Vrai si le texte du document est indexable (recherche plein texte,
+    /// démon). Les images sans couche texte (CBZ) n'en sont pas.
+    public var isTextExtractable: Bool {
+        switch self {
+        case .pdf, .epub, .txt, .md, .mobi, .azw3, .azw, .fb2, .fbz,
+             .html, .docx, .doc, .odt, .rtf: true
+        case .cbz, .djvu, .cbr, .kfx: false
+        }
+    }
+
+    /// Les formats que le lecteur interne ouvre — utilisé par l'app pour
+    /// décider d'ouvrir une fenêtre plutôt que de déléguer au système.
+    public var isReadableInIshtar: Bool { readingEngine != .none }
 }
 
 public enum CreatorRole: String, Codable, CaseIterable, Sendable, DatabaseValueConvertible {

@@ -17,8 +17,60 @@ public enum EmbeddedMetadata {
         switch format {
         case .pdf: readPDF(fileURL)
         case .epub: readEPUB(fileURL)
+        case .mobi, .azw3, .azw: readMOBI(fileURL)
+        case .docx: readDOCX(fileURL)
+        case .fb2: readFictionBook(fileURL, zipped: false)
+        case .fbz: readFictionBook(fileURL, zipped: true)
         default: nil
         }
+    }
+
+    // MARK: - Famille MOBI
+
+    /// Les enregistrements EXTH portent titre, auteur, éditeur, ISBN et date —
+    /// c'est le meilleur étage 2 de tous les formats, quand le fichier n'est
+    /// pas verrouillé.
+    static func readMOBI(_ url: URL) -> MetadataGuess? {
+        guard let document = try? MOBIDocument(fileURL: url) else { return nil }
+        let meta = document.metadata
+
+        let title = sanitizedTitle(meta.title)
+        let author = sanitizedAuthor(meta.author)
+        let isbn13 = meta.isbn.flatMap { MetadataPatterns.isbn13(in: $0) }
+
+        guard title != nil || author != nil || isbn13 != nil else { return nil }
+        return MetadataGuess(
+            title: title ?? "",
+            author: author,
+            year: meta.date.flatMap { MetadataPatterns.year(in: $0) },
+            publisher: meta.publisher?.isEmpty == true ? nil : meta.publisher,
+            language: meta.language.map { String($0.prefix(2)).lowercased() },
+            isbn13: isbn13,
+            confidence: .structured
+        )
+    }
+
+    // MARK: - DOCX
+
+    /// `docProps/core.xml` : du Dublin Core, comme l'OPF d'un EPUB. Souvent
+    /// sale (l'auteur est le nom de session Windows) — le filtre d'hygiène
+    /// commun s'en charge.
+    static func readDOCX(_ url: URL) -> MetadataGuess? {
+        guard let core = OfficeDocument.docxMetadata(url) else { return nil }
+        let title = sanitizedTitle(core.title)
+        let author = sanitizedAuthor(core.author)
+        guard title != nil || author != nil else { return nil }
+        return MetadataGuess(title: title ?? "", author: author, confidence: .structured)
+    }
+
+    // MARK: - FictionBook
+
+    static func readFictionBook(_ url: URL, zipped: Bool) -> MetadataGuess? {
+        guard let info = OfficeDocument.fictionBookMetadata(url, zipped: zipped) else { return nil }
+        let title = sanitizedTitle(info.title)
+        let author = sanitizedAuthor(info.author)
+        guard title != nil || author != nil else { return nil }
+        return MetadataGuess(title: title ?? "", author: author, confidence: .structured)
     }
 
     // MARK: - PDF
