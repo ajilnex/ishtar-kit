@@ -9,6 +9,15 @@ import Vision
 /// jamais de réseau. Même écriture que ExtractionPipeline (pages effacées
 /// puis réinsérées dans une transaction), mais déclenché par un geste
 /// explicite de l'utilisateur, jamais par le scan ni l'indexation de fond.
+///
+/// WP-OCR-VISION2 : sur macOS 26+, la reconnaissance passe par
+/// `RecognizeDocumentsRequest` (regroupement en lignes/paragraphes, meilleure
+/// tenue des mises en page) ; en deçà (macOS 14-15), repli sur
+/// `VNRecognizeTextRequest`. Plancher macOS 14 tenu volontairement — des
+/// chercheurs travaillent sur de vieux Mac (décision d'Aubin, 29/07). Les deux
+/// moteurs sont DÉTERMINISTES : ils renoncent (trou) plutôt que d'inventer.
+/// Aucun OCR génératif n'écrit ici — voir l'invariant du bloc OCR
+/// (../../docs/30-CHANTIERS.md) et 40-GUIDE-AGENTS.md.
 public struct OCRExtractor: Sendable {
     public init() {}
 
@@ -49,14 +58,7 @@ public struct OCRExtractor: Sendable {
             guard let image = ctx.makeImage() else { continue }
 
             // 2. Reconnaissance Vision (locale, français puis anglais).
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.recognitionLanguages = ["fr-FR", "en-US"]
-            request.usesLanguageCorrection = true
-            try VNImageRequestHandler(cgImage: image).perform([request])
-            let text = (request.results ?? [])
-                .compactMap { $0.topCandidates(1).first?.string }
-                .joined(separator: "\n")
+            let text = try await Self.recognizeText(in: image)
 
             // 3. On ne retient que les pages effectivement porteuses de texte.
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -82,5 +84,33 @@ public struct OCRExtractor: Sendable {
         }
 
         return recognized.count
+    }
+
+    /// Reconnaît le texte d'une page rendue en bitmap. macOS 26+ :
+    /// `RecognizeDocumentsRequest`, dont le `transcript` restitue le texte du
+    /// document dans l'ordre de lecture. Repli macOS 14-15 :
+    /// `VNRecognizeTextRequest`. Local et déterministe dans les deux cas.
+    private static func recognizeText(in image: CGImage) async throws -> String {
+        if #available(macOS 26, iOS 26, *) {
+            var request = RecognizeDocumentsRequest()
+            request.textRecognitionOptions.recognitionLanguages = [
+                Locale.Language(identifier: "fr-FR"),
+                Locale.Language(identifier: "en-US"),
+            ]
+            request.textRecognitionOptions.useLanguageCorrection = true
+            let observations = try await request.perform(on: image)
+            return observations
+                .map { $0.document.text.transcript }
+                .joined(separator: "\n")
+        } else {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = ["fr-FR", "en-US"]
+            request.usesLanguageCorrection = true
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            return (request.results ?? [])
+                .compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: "\n")
+        }
     }
 }
