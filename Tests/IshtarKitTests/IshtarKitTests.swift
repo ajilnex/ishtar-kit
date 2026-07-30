@@ -1515,3 +1515,63 @@ struct PassageLocatorTests {
         #expect(PassageLocator.range(of: "", in: page) == nil)
     }
 }
+
+@Suite("Passages — recherche souple : proposer, laisser l'humain trancher")
+struct PassageMatchesTests {
+    private let page = """
+    Concurrently, the cosmic reinscription of Freud's account of the
+    death-drive can terminate the suffi-
+    ciency of capitalist participation for accelerating the disenchanting
+    emancipation harboured by the truth of extinction. Later, the same
+    reinscription of capitalist accounts returns under another name.
+    """
+
+    @Test("La phrase exacte reste exacte : un seul candidat, score plein")
+    func exactWins() {
+        let found = PassageLocator.matches(
+            of: "the sufficiency of capitalist participation", in: page)
+        #expect(found.count == 1)
+        #expect(found[0].score == 1)
+    }
+
+    @Test("Une mémoire approximative trouve quand même le passage")
+    func fuzzyRecall() throws {
+        // Mots inversés, un mot faux, la ponctuation oubliée : ce que fait une
+        // mémoire humaine. Le mode strict refuserait tout.
+        let vague = "capitalist participation sufficiency accelerating"
+        #expect(PassageLocator.range(of: vague, in: page) == nil)
+
+        let found = PassageLocator.matches(of: vague, in: page)
+        let best = try #require(found.first)
+        #expect(best.score < 1)
+        #expect(best.score >= 0.5)
+        let text = (page as NSString).substring(with: best.range)
+        #expect(text.contains("capitalist"))
+    }
+
+    @Test("Plusieurs zones ressemblantes sont proposées, la meilleure d'abord")
+    func severalCandidates() throws {
+        // Trois mots qui ne se suivent nulle part, mais dont deux se retrouvent
+        // dans deux zones distinctes de la page.
+        let vague = "cosmic reinscription capitalist"
+        #expect(PassageLocator.range(of: vague, in: page) == nil)
+
+        let found = PassageLocator.matches(of: vague, in: page,
+                                           limit: 5, threshold: 0.6)
+        try #require(found.count >= 2)
+        #expect(found[0].score >= found[1].score)
+        // Les zones proposées ne se chevauchent pas : la page ne s'allume pas
+        // entière.
+        for (a, b) in zip(found, found.dropFirst()) {
+            #expect(a.range.location + a.range.length <= b.range.location
+                || b.range.location + b.range.length <= a.range.location)
+        }
+    }
+
+    @Test("Une requête étrangère au texte ne propose rien")
+    func nothingRelevant() {
+        #expect(PassageLocator.matches(
+            of: "la sociologie des organisations bureaucratiques", in: page).isEmpty)
+        #expect(PassageLocator.matches(of: "", in: page).isEmpty)
+    }
+}
