@@ -44,6 +44,16 @@ public actor DaemonSession {
     4. Si la bibliothèque ne contient pas la réponse, dis-le simplement.
     """
 
+    /// Réamorce le fil avec un échange déjà tenu — la reprise d'un fil de
+    /// l'historique. On ne rejoue QUE ce qui a été montré : ni les appels
+    /// d'outils, ni les jetons propres à un fournisseur (la signature de pensée
+    /// de Gemini 3). Un fil ouvert avec un modèle distant se poursuit donc avec
+    /// un modèle local, sans que l'un hérite des jetons de l'autre.
+    public func resume(with exchange: [LLMMessage]) {
+        let system = transcript.first { $0.role == .system }
+        transcript = (system.map { [$0] } ?? []) + exchange
+    }
+
     /// Pose une question ; le flux rend les événements jusqu'à `.finished`.
     public func send(_ userText: String) -> AsyncStream<DaemonEvent> {
         AsyncStream { continuation in
