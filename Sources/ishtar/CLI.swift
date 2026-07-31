@@ -3,6 +3,7 @@ import Foundation
 import IshtarCatalog
 import IshtarIngest
 import IshtarSearch
+import PDFKit
 
 @main
 struct IshtarCLI: AsyncParsableCommand {
@@ -11,7 +12,7 @@ struct IshtarCLI: AsyncParsableCommand {
         abstract: "Ishtar — le moteur de bibliothèque savante. / The scholarly library engine.",
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
-                      Embed.self, Find.self]
+                      Embed.self, Find.self, OCRCompare.self]
     )
 }
 
@@ -193,5 +194,73 @@ struct Search: AsyncParsableCommand {
             print("\(hit.title)\(authors)  [p. \(hit.pageNumber)]")
             print("  \(hit.snippet)")
         }
+    }
+}
+
+// MARK: - Banc de mesure OCR (WP-OCR-MESURE)
+
+/// Compare les deux moteurs Vision sur un même PDF muet, sans rien écrire dans
+/// un catalogue : le moteur macOS 26 (`RecognizeDocumentsRequest`) et le repli
+/// (`VNRecognizeTextRequest`). Le but n'est pas le nombre de caractères mais le
+/// MODE d'échec (renoncer vs inventer), qui se lit dans les transcriptions.
+/// Arbitre la règle anti-OCR-génératif (voir ../docs/30-CHANTIERS.md, bloc OCR).
+struct OCRCompare: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "ocr-compare",
+        abstract: "Compare les deux moteurs OCR Vision sur un PDF muet (macOS 26 vs repli) et écrit les transcriptions à comparer à l'œil."
+    )
+
+    @Argument(help: "Le PDF (scanné/muet) à reconnaître.", transform: URL.init(fileURLWithPath:))
+    var pdf: URL
+
+    @Option(name: .long, help: "Première page à traiter (1-indexée, défaut 1).")
+    var from: Int = 1
+
+    @Option(name: .long, help: "Nombre de pages à traiter (défaut 3).")
+    var pages: Int = 3
+
+    @Option(name: .long, help: "Dossier de sortie des transcriptions (défaut : ./ocr-compare).",
+            transform: URL.init(fileURLWithPath:))
+    var out: URL = URL(fileURLWithPath: "ocr-compare")
+
+    func run() async throws {
+        guard let doc = PDFDocument(url: pdf) else {
+            throw ValidationError("PDF illisible : \(pdf.path)")
+        }
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+
+        let start = max(0, from - 1)
+        let end = min(start + pages, doc.pageCount)
+        print("Comparaison OCR — \(pdf.lastPathComponent) — pages \(start + 1)…\(end) sur \(doc.pageCount)")
+        print("Sortie : \(out.path)")
+        print(String(repeating: "─", count: 64))
+        print("page │  macOS 26 (car.) │  repli (car.) │ écart")
+
+        for index in start ..< end {
+            guard let page = doc.page(at: index),
+                  let image = OCRExtractor.renderPage(page) else { continue }
+
+            let modern: String
+            do {
+                modern = try await OCRExtractor.recognize(in: image, engine: .documentRequest)
+            } catch OCRExtractor.OCRError.engineUnavailable(let why) {
+                modern = "‹moteur macOS 26+ indisponible : \(why)›"
+            }
+            let legacy = try await OCRExtractor.recognize(in: image, engine: .legacyText)
+
+            let number = index + 1
+            try modern.write(to: out.appendingPathComponent("p\(number)-macos26.txt"),
+                             atomically: true, encoding: .utf8)
+            try legacy.write(to: out.appendingPathComponent("p\(number)-legacy.txt"),
+                             atomically: true, encoding: .utf8)
+
+            print(String(format: "%4d │ %16d │ %13d │ %+d",
+                         number, modern.count, legacy.count, modern.count - legacy.count))
+        }
+
+        print(String(repeating: "─", count: 64))
+        print("Lis les fichiers p*-macos26.txt et p*-legacy.txt : le nombre de")
+        print("caractères ne dit rien du mode d'échec. Cherche les endroits où un")
+        print("moteur invente un mot plausible là où l'autre laisse un trou.")
     }
 }
