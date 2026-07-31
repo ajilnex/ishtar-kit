@@ -103,3 +103,51 @@ struct ConversationTitleTests {
         #expect(ConversationTitle.derived(from: "   \n  ") == nil)
     }
 }
+
+@Suite("Démon — chercher dans l'historique")
+struct ConversationSearchTests {
+    private func makeHistory() async throws -> (ConversationStore, UUID, UUID) {
+        let store = ConversationStore(db: try CatalogDatabase(inMemory: ()))
+        let kant = try await store.start()
+        try await store.append(to: kant.id, role: .user, content: "Que dit Kant ?")
+        try await store.append(to: kant.id, role: .assistant,
+                               content: "La raison pure examine ses limites.")
+        let sumer = try await store.start()
+        try await store.append(to: sumer.id, role: .user, content: "Cherche Sumer")
+        try await store.append(to: sumer.id, role: .assistant,
+                               content: "La vérité de l'écriture cunéiforme.")
+        return (store, kant.id, sumer.id)
+    }
+
+    @Test("On retrouve un fil par son titre comme par le corps d'un message")
+    func byTitleAndBody() async throws {
+        let (store, kant, sumer) = try await makeHistory()
+
+        // Par le titre, dérivé de la première question.
+        #expect(try await store.search("Kant").map(\.id) == [kant])
+        // Par le contenu d'une réponse, que le titre ne porte pas.
+        #expect(try await store.search("cunéiforme").map(\.id) == [sumer])
+    }
+
+    @Test("Les accents et la casse ne font pas échouer la recherche")
+    func foldedSearch() async throws {
+        let (store, _, sumer) = try await makeHistory()
+        #expect(try await store.search("VERITE").map(\.id) == [sumer])
+        #expect(try await store.search("vérité").map(\.id) == [sumer])
+    }
+
+    @Test("Une requête vide rend tout ; une requête étrangère ne rend rien")
+    func edges() async throws {
+        let (store, _, _) = try await makeHistory()
+        #expect(try await store.search("").count == 2)
+        #expect(try await store.search("   ").count == 2)
+        #expect(try await store.search("bureaucratie").isEmpty)
+    }
+
+    @Test("Un fil renommé se retrouve par son nouveau nom")
+    func renamedThenFound() async throws {
+        let (store, kant, _) = try await makeHistory()
+        try await store.rename(id: kant, to: "Les limites de la raison")
+        #expect(try await store.search("limites").map(\.id).contains(kant))
+    }
+}

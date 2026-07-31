@@ -130,6 +130,49 @@ public struct ConversationStore: Sendable {
         }
     }
 
+    /// Les fils dont le TITRE ou l'un des messages contient `query`, le plus
+    /// récemment nourri d'abord. Une requête vide rend l'historique entier.
+    ///
+    /// Le repli (casse, diacritiques) se fait en Swift et non en SQL : SQLite ne
+    /// replie pas les accents, or chercher « verite » doit trouver « vérité ».
+    /// L'historique d'un chercheur tient en mémoire ; le jour où il ne tiendra
+    /// plus, ce sera à FTS5 de le porter, comme pour le plein texte.
+    public func search(_ query: String, limit: Int = 30) async throws -> [Conversation] {
+        let needle = Self.fold(query)
+        guard !needle.isEmpty else { return try await recent(limit: limit) }
+
+        return try await db.pool.read { conn in
+            var matching: Set<UUID> = []
+            for row in try Row.fetchAll(conn, sql: "SELECT id, title FROM conversation") {
+                guard let title: String = row["title"] else { continue }
+                if Self.fold(title).contains(needle) { matching.insert(row["id"]) }
+            }
+            for row in try Row.fetchAll(
+                conn, sql: "SELECT conversationId, content FROM conversation_message") {
+                let id: UUID = row["conversationId"]
+                guard !matching.contains(id) else { continue }
+                let content: String = row["content"]
+                if Self.fold(content).contains(needle) { matching.insert(id) }
+            }
+            guard !matching.isEmpty else { return [] }
+            return try Conversation
+                .filter(Array(matching).contains(Column("id")))
+                .order(Column("dateModified").desc)
+                .limit(limit)
+                .fetchAll(conn)
+        }
+    }
+
+    /// Repli neutre, même mécanique que l'ancrage des surlignements. Copie
+    /// assumée : un `TextFolding` partagé serait sa vraie place, mais il vivrait
+    /// dans un fichier tenu par un autre chantier.
+    private static func fold(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
     public func rename(id: UUID, to title: String?) async throws {
         try await db.pool.write { conn in
             guard var conversation = try Conversation.fetchOne(conn, key: id) else { return }
