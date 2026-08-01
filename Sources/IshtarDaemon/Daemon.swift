@@ -94,26 +94,3 @@ public protocol EmbeddingProvider: Sendable {
 
 // MARK: - Outils
 
-/// Registre des outils offerts au démon. Les noms sont figés dès M0 pour que les
-/// prompts, la documentation et les tests parlent la même langue.
-/// `readMemory`/`writeMemory` sont réservés (mémoire du démon, activation M4) :
-/// la mémoire sera des fichiers Markdown lisibles, jamais une boîte noire.
-public enum DaemonTool: String, CaseIterable, Sendable {
-    case searchCatalog = "search_catalog"
-    case searchFulltext = "search_fulltext"
-    case semanticSearch = "semantic_search"
-    case readPage = "read_page"
-    case openDocument = "open_document"
-    case createArtifact = "create_artifact"
-    case createLink = "create_link"
-    case listAnnotations = "list_annotations"
-    case proposeMetadata = "propose_metadata"
-    case readMemory = "read_memory"
-    case writeMemory = "write_memory"
-
-    /// Outils exposés en v1 (M3). Les autres attendent leur jalon.
-    public static let v1: [DaemonTool] = [
-        .searchCatalog, .searchFulltext, .semanticSearch,
-        .readPage, .openDocument, .createArtifact, .proposeMetadata,
-    ]
-}

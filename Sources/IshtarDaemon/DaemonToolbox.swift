@@ -4,6 +4,7 @@ import IshtarCatalog
 import IshtarSearch
 
 /// La boîte à outils du démon : ce qu'il sait FAIRE sur la bibliothèque.
+/// (Outils réservés pour jalons ultérieurs : create_artifact, create_link, read_memory/write_memory en M4).
 /// Quatre outils v1, minimaux et sûrs — chercher (hybride), lire une page,
 /// ouvrir un document au bon endroit (surbrillance transitoire), situer la
 /// bibliothèque. Tout est local ; `open_document` ne fait qu'émettre une
@@ -49,6 +50,17 @@ public struct DaemonToolbox: Sendable {
                 name: "library_stats",
                 description: "Vue d'ensemble : nombre de documents, statuts, exemples de titres.",
                 parametersJSON: #"{"type":"object","properties":{}}"#),
+            LLMToolSpec(
+                name: "search_annotations",
+                description: """
+                Recherche dans les passages surlignés et les notes personnelles du chercheur. \
+                La sortie distingue le 'passage surligné' de la 'note du chercheur'. \
+                IMPORTANT : la note du chercheur ne doit jamais être présentée comme une citation de l'ouvrage. \
+                Retourne des passages avec document_id et page, pour permettre l'utilisation d'open_document.
+                """,
+                parametersJSON: #"""
+                {"type":"object","properties":{"query":{"type":"string","description":"Termes à chercher dans la note ou le passage"},"document_id":{"type":"string","description":"Optionnel. Restreint la recherche à un document précis"}},"required":["query"]}
+                """#),
         ]
     }
 
@@ -86,6 +98,18 @@ public struct DaemonToolbox: Sendable {
 
         case "library_stats":
             return (await stats(), nil)
+
+        case "search_annotations":
+            guard let query = args["query"] as? String, !query.isEmpty else {
+                return ("Erreur : paramètre 'query' manquant.", nil)
+            }
+            let docId: UUID?
+            if let idString = args["document_id"] as? String {
+                docId = UUID(uuidString: idString)
+            } else {
+                docId = nil
+            }
+            return (await searchAnnotations(query, documentId: docId), nil)
 
         default:
             return ("Outil inconnu : \(name)", nil)
@@ -146,5 +170,26 @@ public struct DaemonToolbox: Sendable {
         \(stats.needsReview), doublons possibles : \(stats.duplicates)).
         Exemples : \(sample)
         """
+    }
+
+    private func searchAnnotations(_ query: String, documentId: UUID?) async -> String {
+        let store = AnnotationStore(db: db)
+        guard let hits = try? await store.search(query: query, documentId: documentId), !hits.isEmpty else {
+            return "Aucune annotation trouvée pour « \(query) »."
+        }
+        
+        return hits.map { hit in
+            let authors = hit.authors.isEmpty ? "" : " (\(hit.authors.joined(separator: ", ")))"
+            // S'il n'y a pas de page (EPUB), on donne une valeur qui indique que l'info est indisponible
+            // mais on garde la consigne de donner de quoi situer.
+            let pageStr = hit.annotation.pageNumber.map { "p. \($0)" } ?? "page absente"
+            
+            var block = "- document_id: \(hit.annotation.documentId) | « \(hit.workTitle) »\(authors), \(pageStr)\n"
+            block += "  passage surligné : \(hit.annotation.quote)"
+            if let note = hit.annotation.note, !note.isEmpty {
+                block += "\n  note du chercheur : \(note)"
+            }
+            return block
+        }.joined(separator: "\n\n")
     }
 }
