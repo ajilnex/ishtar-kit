@@ -103,3 +103,22 @@ avec un modèle distant et de le poursuivre avec un modèle local.
 - `ConversationStore.purgeEmpty()` balaie les fils ouverts puis abandonnés sans
   un mot : sans ce ménage, chaque « nouvelle conversation » laisserait une
   coquille dans l'historique.
+
+## Migration v5 — Projets et Encres (Lot B)
+
+Additive, après v4.
+
+- **project** — un espace de travail.
+  - `id`, `name` (non nul), `notes` (libre), `dateCreated`, `dateModified` (indexée).
+- **project_item** — l'appartenance d'un document à un projet.
+  - `projectId` → `project(id)` (`ON DELETE CASCADE`).
+  - `documentId` → `document(id)` (`ON DELETE CASCADE`).
+  - `dateAdded`.
+  - Index `UNIQUE` sur `(projectId, documentId)`.
+- **link** — l'encre, une relation colorée entre deux passages que le chercheur a marqués.
+  - `id`, `kind` (texte : le type de relation), `color` (nom de couleur, nul = défaut).
+  - `projectId` (nullable, reste global si nil).
+  - `sourceAnnotationId` → `annotation(id)` (`ON DELETE CASCADE`), `targetAnnotationId` → `annotation(id)` (`ON DELETE CASCADE`).
+  - `note`, `dateCreated`, `dateModified`.
+
+**Note sur l'intégrité** : La colonne `projectId` existait déjà dans `annotation` (créée en v3). Nous n'avons PAS reconstruit la table `annotation` pour lui ajouter une contrainte de clé étrangère vers `project(id)`. SQLite ne sait pas ajouter une contrainte à une colonne existante sans reconstruire la table (ce qui n'est pas une migration purement additive). La colonne reste un `TEXT` simple. L'intégrité référentielle est garantie par le `ProjectStore` : supprimer un projet déclenche manuellement une mise à nul des `projectId` portés par les annotations et les encres, pour qu'elles retombent dans la couche globale sans jamais être perdues.

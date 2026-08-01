@@ -194,8 +194,34 @@ public final class CatalogDatabase: Sendable {
                           columns: ["conversationId", "position"])
         }
 
-        // Les migrations suivantes (embeddings, liens, artéfacts) arrivent avec
-        // les jalons M2–M4.
+        migrator.registerMigration("v5_projets_et_encres") { db in
+            try db.create(table: "project") { t in
+                t.column("id", .text).primaryKey()
+                t.column("name", .text).notNull()
+                t.column("notes", .text)
+                t.column("dateCreated", .datetime).notNull()
+                t.column("dateModified", .datetime).notNull().indexed()
+            }
+            try db.create(table: "project_item") { t in
+                t.column("projectId", .text).notNull().references("project", onDelete: .cascade)
+                t.column("documentId", .text).notNull().references("document", onDelete: .cascade)
+                t.column("dateAdded", .datetime).notNull()
+                t.uniqueKey(["projectId", "documentId"])
+            }
+            try db.create(table: "link") { t in
+                t.column("id", .text).primaryKey()
+                t.column("kind", .text).notNull()
+                t.column("color", .text)
+                t.column("projectId", .text)
+                t.column("sourceAnnotationId", .text).notNull().references("annotation", onDelete: .cascade)
+                t.column("targetAnnotationId", .text).notNull().references("annotation", onDelete: .cascade)
+                t.column("note", .text)
+                t.column("dateCreated", .datetime).notNull()
+                t.column("dateModified", .datetime).notNull()
+            }
+        }
+
+        // Les migrations suivantes (embeddings, artéfacts) arrivent avec les jalons M3–M4.
 
         return migrator
     }

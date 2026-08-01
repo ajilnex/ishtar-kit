@@ -432,3 +432,74 @@ public struct SourceFolder: Identifiable, Codable, Hashable, Sendable, Fetchable
         self.dateAdded = dateAdded
     }
 }
+
+// MARK: - Projets et encres
+
+public struct Project: Identifiable, Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "project"
+
+    public var id: UUID
+    public var name: String
+    public var notes: String?
+    public var dateCreated: Date
+    public var dateModified: Date
+
+    public init(id: UUID = UUID(), name: String, notes: String? = nil, dateCreated: Date = Date(), dateModified: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.notes = notes
+        self.dateCreated = dateCreated
+        self.dateModified = dateModified
+    }
+}
+
+public struct ProjectItem: Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "project_item"
+
+    public var projectId: UUID
+    public var documentId: UUID
+    public var dateAdded: Date
+
+    public init(projectId: UUID, documentId: UUID, dateAdded: Date = Date()) {
+        self.projectId = projectId
+        self.documentId = documentId
+        self.dateAdded = dateAdded
+    }
+}
+
+/// Une relation colorée entre deux passages que le chercheur a marqués (encres).
+public struct Link: Identifiable, Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "link"
+
+    public var id: UUID
+    public var kind: String
+    public var color: String?
+    public var projectId: UUID?
+    public var sourceAnnotationId: UUID
+    public var targetAnnotationId: UUID
+    public var note: String?
+    public var dateCreated: Date
+    public var dateModified: Date
+
+    public init(
+        id: UUID = UUID(),
+        kind: String,
+        color: String? = nil,
+        projectId: UUID? = nil,
+        sourceAnnotationId: UUID,
+        targetAnnotationId: UUID,
+        note: String? = nil,
+        dateCreated: Date = Date(),
+        dateModified: Date = Date()
+    ) {
+        self.id = id
+        self.kind = kind
+        self.color = color
+        self.projectId = projectId
+        self.sourceAnnotationId = sourceAnnotationId
+        self.targetAnnotationId = targetAnnotationId
+        self.note = note
+        self.dateCreated = dateCreated
+        self.dateModified = dateModified
+    }
+}
