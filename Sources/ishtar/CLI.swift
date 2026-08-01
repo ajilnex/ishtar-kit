@@ -12,7 +12,7 @@ struct IshtarCLI: AsyncParsableCommand {
         abstract: "Ishtar — le moteur de bibliothèque savante. / The scholarly library engine.",
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
-                      Embed.self, Find.self, OCRCompare.self]
+                      Embed.self, Find.self, OCRCompare.self, ImportBibtex.self]
     )
 }
 
@@ -262,5 +262,79 @@ struct OCRCompare: AsyncParsableCommand {
         print("Lis les fichiers p*-macos26.txt et p*-legacy.txt : le nombre de")
         print("caractères ne dit rien du mode d'échec. Cherche les endroits où un")
         print("moteur invente un mot plausible là où l'autre laisse un trou.")
+    }
+}
+
+// MARK: - BibTeX Import (WP-02b)
+
+struct ImportBibtex: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "import-bibtex",
+        abstract: "Importe et rapproche un fichier BibTeX (ex: Zotero) avec les documents existants."
+    )
+
+    @Argument(help: "Le fichier BibTeX à importer.", transform: URL.init(fileURLWithPath:))
+    var file: URL
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Applique les propositions sûres à la base de données. Par défaut, n'applique rien (simulation).")
+    var apply = false
+
+    func run() async throws {
+        let content = try String(contentsOf: file, encoding: .utf8)
+        let entries = BibTeXParser.parse(content: content)
+        
+        print("Fichier lu : \(file.lastPathComponent)")
+        print("Entrées trouvées : \(entries.count)")
+        print("Recherche des correspondances dans le catalogue...")
+        
+        let database = try CatalogDatabase(at: db)
+        let importer = BibTeXImporter()
+        let report = try await importer.match(entries: entries, in: database)
+        
+        print(String(repeating: "─", count: 60))
+        print("Documents lus           \(report.totalRead)")
+        print("Rapprochements sûrs     \(report.strongMatches.count) (fichier, DOI, ISBN)")
+        print("Rapprochements faibles  \(report.weakMatches.count) (titre + auteur)")
+        print("Sans correspondance     \(report.unmatched.count)")
+        
+        if apply {
+            print(String(repeating: "─", count: 60))
+            print("Application des propositions sûres...")
+            var applied = 0
+            
+            for match in report.strongMatches {
+                guard let doc = match.document, let guess = match.guess else { continue }
+                guard let editionId = doc.editionId else { continue }
+                let edition = try await database.pool.read { try Edition.fetchOne($0, key: editionId) }
+                guard let edition = edition else { continue }
+                
+                let authors = guess.author?.components(separatedBy: " and ") ?? []
+                
+                try await CatalogStore(db: database).applyProposal(
+                    workId: edition.workId,
+                    editionId: doc.editionId,
+                    documentId: doc.id,
+                    title: guess.title,
+                    authors: authors,
+                    year: guess.year,
+                    publisher: guess.publisher,
+                    language: guess.language,
+                    isbn13: guess.isbn13,
+                    doi: guess.doi
+                )
+                applied += 1
+            }
+            
+            print("\(applied) document(s) mis à jour de façon certaine.")
+            if !report.weakMatches.isEmpty {
+                print("Note : \(report.weakMatches.count) propositions faibles ont été ignorées. Elles devront être validées manuellement (non pris en charge par le CLI).")
+            }
+        } else {
+            print(String(repeating: "─", count: 60))
+            print("Mode simulation. Utilisez --apply pour écrire les propositions sûres.")
+        }
     }
 }
