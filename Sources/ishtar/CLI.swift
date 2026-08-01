@@ -265,7 +265,7 @@ struct OCRCompare: AsyncParsableCommand {
     }
 }
 
-// MARK: - BibTeX Import (WP-02b)
+// MARK: - Import BibTeX (WP-10 / M2b — le pendant en entrée de l'export WP-09)
 
 struct ImportBibtex: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -304,15 +304,23 @@ struct ImportBibtex: AsyncParsableCommand {
             print(String(repeating: "─", count: 60))
             print("Application des propositions sûres...")
             var applied = 0
-            
+            // Un rapprochement sûr peut viser un document qui n'a pas encore
+            // d'édition. On ne peut pas lui appliquer la notice — applyProposal
+            // écrit sur l'œuvre que porte l'édition — mais on ne l'escamote pas
+            // pour autant : il est compté et nommé. Rien ne disparaît en silence.
+            var skipped: [String] = []
+
             for match in report.strongMatches {
                 guard let doc = match.document, let guess = match.guess else { continue }
-                guard let editionId = doc.editionId else { continue }
-                let edition = try await database.pool.read { try Edition.fetchOne($0, key: editionId) }
-                guard let edition = edition else { continue }
-                
+                guard let editionId = doc.editionId,
+                      let edition = try await database.pool.read({ try Edition.fetchOne($0, key: editionId) })
+                else {
+                    skipped.append(doc.originalFileName)
+                    continue
+                }
+
                 let authors = guess.author?.components(separatedBy: " and ") ?? []
-                
+
                 try await CatalogStore(db: database).applyProposal(
                     workId: edition.workId,
                     editionId: doc.editionId,
@@ -329,6 +337,11 @@ struct ImportBibtex: AsyncParsableCommand {
             }
             
             print("\(applied) document(s) mis à jour de façon certaine.")
+            if !skipped.isEmpty {
+                print("\(skipped.count) rapprochement(s) sûr(s) NON appliqué(s) — document sans édition :")
+                for name in skipped.prefix(10) { print("  · \(name)") }
+                if skipped.count > 10 { print("  … et \(skipped.count - 10) autre(s)") }
+            }
             if !report.weakMatches.isEmpty {
                 print("Note : \(report.weakMatches.count) propositions faibles ont été ignorées. Elles devront être validées manuellement (non pris en charge par le CLI).")
             }
