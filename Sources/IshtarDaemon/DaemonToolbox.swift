@@ -56,7 +56,8 @@ public struct DaemonToolbox: Sendable {
                 Recherche dans les passages surlignés et les notes personnelles du chercheur. \
                 La sortie distingue le 'passage surligné' de la 'note du chercheur'. \
                 IMPORTANT : la note du chercheur ne doit jamais être présentée comme une citation de l'ouvrage. \
-                Retourne des passages avec document_id et page, pour permettre l'utilisation d'open_document.
+                Retourne des passages avec document_id et page, pour permettre l'utilisation d'open_document. \
+                Pour une annotation sans page, appeler open_document avec page: 1 et le passage surligné exact en highlight.
                 """,
                 parametersJSON: #"""
                 {"type":"object","properties":{"query":{"type":"string","description":"Termes à chercher dans la note ou le passage"},"document_id":{"type":"string","description":"Optionnel. Restreint la recherche à un document précis"}},"required":["query"]}
@@ -177,14 +178,18 @@ public struct DaemonToolbox: Sendable {
         guard let hits = try? await store.search(query: query, documentId: documentId), !hits.isEmpty else {
             return "Aucune annotation trouvée pour « \(query) »."
         }
-        
+
         return hits.map { hit in
             let authors = hit.authors.isEmpty ? "" : " (\(hit.authors.joined(separator: ", ")))"
-            // S'il n'y a pas de page (EPUB), on donne une valeur qui indique que l'info est indisponible
-            // mais on garde la consigne de donner de quoi situer.
-            let pageStr = hit.annotation.pageNumber.map { "p. \($0)" } ?? "page absente"
-            
-            var block = "- document_id: \(hit.annotation.documentId) | « \(hit.workTitle) »\(authors), \(pageStr)\n"
+
+            var positionStr = ""
+            if let page = hit.annotation.pageNumber {
+                positionStr = ", p. \(page)"
+            } else if let cfi = hit.annotation.cfi {
+                positionStr = ", \(cfi)"
+            }
+
+            var block = "- document_id: \(hit.annotation.documentId) | « \(hit.workTitle) »\(authors)\(positionStr)\n"
             block += "  passage surligné : \(hit.annotation.quote)"
             if let note = hit.annotation.note, !note.isEmpty {
                 block += "\n  note du chercheur : \(note)"

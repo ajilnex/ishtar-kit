@@ -66,21 +66,21 @@ public struct AnnotationStore: Sendable {
     }
 
     /// Filtre et classe purement en mémoire les résultats de recherche.
-    public static func search(query: String, in candidates: [AnnotationSearchResult]) -> [AnnotationSearchResult] {
+    public static func search(query: String, in candidates: [Annotation]) -> [Annotation] {
         let normalizedQuery = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
         if normalizedQuery.isEmpty { return [] }
-        
-        return candidates.compactMap { candidate -> (result: AnnotationSearchResult, isNoteMatch: Bool, isQuoteMatch: Bool)? in
-            let note = candidate.annotation.note ?? ""
-            let quote = candidate.annotation.quote
+
+        return candidates.compactMap { annotation -> (annotation: Annotation, isNoteMatch: Bool, isQuoteMatch: Bool)? in
+            let note = annotation.note ?? ""
+            let quote = annotation.quote
             let normNote = note.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             let normQuote = quote.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-            
+
             let isNoteMatch = normNote.contains(normalizedQuery)
             let isQuoteMatch = normQuote.contains(normalizedQuery)
-            
+
             if isNoteMatch || isQuoteMatch {
-                return (candidate, isNoteMatch, isQuoteMatch)
+                return (annotation, isNoteMatch, isQuoteMatch)
             }
             return nil
         }
@@ -91,37 +91,42 @@ public struct AnnotationStore: Sendable {
             if a.isQuoteMatch != b.isQuoteMatch {
                 return a.isQuoteMatch // puis la citation
             }
-            // puis date de modif la plus récente
-            return a.result.annotation.dateModified > b.result.annotation.dateModified
+            // puis date de modification la plus récente
+            return a.annotation.dateModified > b.annotation.dateModified
         }
-        .map { $0.result }
+        .map { $0.annotation }
     }
 
-    /// Recherche les annotations (note ou quote) qui matchent la requête.
+    /// Recherche les annotations (note ou citation) correspondantes.
     public func search(query: String, documentId: UUID? = nil) async throws -> [AnnotationSearchResult] {
-        let candidates = try await db.pool.read { conn -> [AnnotationSearchResult] in
+        let matchingAnnotations = try await db.pool.read { conn -> [Annotation] in
             var req = Annotation.all()
             if let documentId {
                 req = req.filter(Column("documentId") == documentId)
             }
-            let annotations = try req.fetchAll(conn)
-            if annotations.isEmpty { return [] }
-            
-            let documentIds = Array(Set(annotations.map(\.documentId)))
+            let allAnnotations = try req.fetchAll(conn)
+            return Self.search(query: query, in: allAnnotations)
+        }
+
+        if matchingAnnotations.isEmpty { return [] }
+
+        return try await db.pool.read { conn in
+            let documentIds = Array(Set(matchingAnnotations.map(\.documentId)))
             let documents = try Document.fetchAll(conn, keys: documentIds)
+
             let editionIds = Array(Set(documents.compactMap(\.editionId)))
             let editions = try Edition.fetchAll(conn, keys: editionIds)
             let workIds = Array(Set(editions.map(\.workId)))
             let works = try Work.fetchAll(conn, keys: workIds)
-            
+
             let workCreators = try WorkCreator
                 .filter(workIds.contains(Column("workId")))
                 .order(Column("position"))
                 .fetchAll(conn)
-            
+
             let creatorIds = Array(Set(workCreators.map(\.creatorId)))
             let creators = try Creator.fetchAll(conn, keys: creatorIds)
-            
+
             let creatorById = Dictionary(uniqueKeysWithValues: creators.map { ($0.id, $0) })
             var authorsByWork: [UUID: [String]] = [:]
             for wc in workCreators where wc.role == .author {
@@ -129,27 +134,36 @@ public struct AnnotationStore: Sendable {
                     authorsByWork[wc.workId, default: []].append(creator.name)
                 }
             }
-            
+
             let workById = Dictionary(uniqueKeysWithValues: works.map { ($0.id, $0) })
             let editionById = Dictionary(uniqueKeysWithValues: editions.map { ($0.id, $0) })
             let documentById = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0) })
-            
-            return annotations.compactMap { annotation in
-                guard let document = documentById[annotation.documentId],
-                      let editionId = document.editionId,
-                      let edition = editionById[editionId],
-                      let work = workById[edition.workId] else {
+
+            return matchingAnnotations.compactMap { annotation in
+                guard let document = documentById[annotation.documentId] else {
                     return nil
                 }
+
+                let workTitle: String
+                let authors: [String]
+
+                if let editionId = document.editionId,
+                   let edition = editionById[editionId],
+                   let work = workById[edition.workId] {
+                    workTitle = work.title
+                    authors = authorsByWork[work.id] ?? []
+                } else {
+                    workTitle = document.originalFileName
+                    authors = []
+                }
+
                 return AnnotationSearchResult(
                     annotation: annotation,
-                    workTitle: work.title,
-                    authors: authorsByWork[work.id] ?? []
+                    workTitle: workTitle,
+                    authors: authors
                 )
             }
         }
-        
-        return Self.search(query: query, in: candidates)
     }
 }
 
