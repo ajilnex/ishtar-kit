@@ -12,7 +12,7 @@ struct IshtarCLI: AsyncParsableCommand {
         abstract: "Ishtar — le moteur de bibliothèque savante. / The scholarly library engine.",
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
-                      Embed.self, Find.self, OCRCompare.self, ImportBibtex.self]
+                      Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self]
     )
 }
 
@@ -348,6 +348,52 @@ struct ImportBibtex: AsyncParsableCommand {
         } else {
             print(String(repeating: "─", count: 60))
             print("Mode simulation. Utilisez --apply pour écrire les propositions sûres.")
+        }
+    }
+}
+
+// MARK: - Import Zotero (WP-10 / M2b)
+
+struct ImportZotero: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "import-zotero",
+        abstract: "Importe et rapproche les collections depuis une base Zotero."
+    )
+
+    @Argument(help: "Le fichier zotero.sqlite ou son dossier parent à importer.", transform: URL.init(fileURLWithPath:))
+    var path: URL
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Applique les propositions à la base de données. Par défaut, n'applique rien (simulation).")
+    var apply = false
+
+    func run() async throws {
+        print("Fichier / dossier lu : \(path.lastPathComponent)")
+        print("Recherche des correspondances dans le catalogue...")
+        
+        let database = try CatalogDatabase(at: db)
+        let importer = ZoteroImporter()
+        let report = try await importer.importDatabase(at: path, into: database, apply: apply)
+        
+        print(String(repeating: "─", count: 60))
+        print("Items lus                   \(report.itemsRead)")
+        print("Pièces jointes trouvées     \(report.attachmentsFound)")
+        print("Pièces rapprochées          \(report.matchedAttachments)")
+        for (reason, count) in report.matchReasons {
+            print("  - signal : \(reason) (\(count))")
+        }
+        print("Collections à créer         \(report.collectionsCreated)")
+        print("Items sans fichier chez ns  \(report.itemsWithoutFile)")
+        print("Non classables (ss édition) \(report.unclassifiableDocuments)")
+        
+        if apply {
+            print(String(repeating: "─", count: 60))
+            print("Application terminée avec succès.")
+        } else {
+            print(String(repeating: "─", count: 60))
+            print("Mode simulation. Utilisez --apply pour écrire les collections.")
         }
     }
 }

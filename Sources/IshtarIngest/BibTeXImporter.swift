@@ -68,78 +68,31 @@ public struct BibTeXImporter: Sendable {
         let doi = entry.fields["doi"]
         let isbn13 = entry.fields["isbn"]
         
-        let authors = rawAuthors.map { BibTeXParser.normalizeAuthors($0).joined(separator: " and ") }
-        
-        let guess = MetadataGuess(
-            title: title,
-            author: authors,
-            year: year,
-            publisher: publisher,
-            language: language,
-            isbn13: isbn13,
-            doi: doi,
-            confidence: .structured // Ce sera affiné lors de l'applyProposal, l'importateur produit structuré car les champs sont nets
-        )
-        
-        // 1. Fichier exact (champ 'file')
+        var fileNames: [String] = []
         if let fileField = entry.fields["file"] {
-            // Format Zotero/Better BibTeX : description:chemin:type
             let parts = fileField.components(separatedBy: ";")
             for part in parts {
                 let segments = part.components(separatedBy: ":")
                 if segments.count >= 2 {
-                    let path = segments[1]
-                    let fileName = URL(fileURLWithPath: path).lastPathComponent
-                    
-                    if let doc = documents.first(where: { $0.originalFileName == fileName }) {
-                        return BibTeXMatch(entry: entry, document: doc, signal: .strong(reason: "fichier exact (\(fileName))"), guess: guess)
-                    }
+                    fileNames.append(segments[1])
                 }
             }
         }
         
-        // 2. DOI ou ISBN exact
-        if let doi = doi, !doi.isEmpty {
-            if let edition = editions.first(where: { $0.doi == doi }),
-               let doc = documents.first(where: { $0.editionId == edition.id }) {
-                return BibTeXMatch(entry: entry, document: doc, signal: .strong(reason: "DOI exact"), guess: guess)
-            }
-        }
+        let query = MatchQuery(
+            title: title,
+            rawAuthors: rawAuthors,
+            year: year,
+            publisher: publisher,
+            language: language,
+            doi: doi,
+            isbn13: isbn13,
+            fileNames: fileNames
+        )
         
-        if let isbn = isbn13, !isbn.isEmpty {
-            let normalizedISBN = isbn.replacingOccurrences(of: "-", with: "").replacingOccurrences(of: " ", with: "")
-            if let edition = editions.first(where: { $0.isbn13?.replacingOccurrences(of: "-", with: "").replacingOccurrences(of: " ", with: "") == normalizedISBN }),
-               let doc = documents.first(where: { $0.editionId == edition.id }) {
-                return BibTeXMatch(entry: entry, document: doc, signal: .strong(reason: "ISBN exact"), guess: guess)
-            }
-        }
+        let matcher = DocumentMatcher()
+        let match = matcher.match(query: query, documents: documents, editions: editions, works: works, in: db)
         
-        // 3. Signal faible : Titre + Auteur
-        if let entryAuthors = rawAuthors, !entryAuthors.isEmpty {
-            let normalizedTitle = title.folding(options: .diacriticInsensitive, locale: .current).lowercased()
-            
-            for work in works {
-                let workTitleNorm = work.title.folding(options: .diacriticInsensitive, locale: .current).lowercased()
-                if workTitleNorm == normalizedTitle {
-                    // Vérifier l'auteur
-                    if let creators = try? Creator.fetchAll(db, sql: "SELECT creator.* FROM creator JOIN work_creator ON creator.id = work_creator.creatorId WHERE work_creator.workId = ?", arguments: [work.id]) {
-                        
-                        let entryNormAuthors = BibTeXParser.normalizeAuthors(entryAuthors).map { $0.folding(options: .diacriticInsensitive, locale: .current).lowercased() }
-                        let workNormAuthors = creators.map { $0.name.folding(options: .diacriticInsensitive, locale: .current).lowercased() }
-                        
-                        // Intersection
-                        let intersection = Set(entryNormAuthors).intersection(Set(workNormAuthors))
-                        if !intersection.isEmpty {
-                            if let edition = editions.first(where: { $0.workId == work.id }),
-                               let doc = documents.first(where: { $0.editionId == edition.id }) {
-                                return BibTeXMatch(entry: entry, document: doc, signal: .weak(reason: "titre et auteur"), guess: guess)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        return BibTeXMatch(entry: entry, document: nil, signal: .none, guess: nil)
+        return BibTeXMatch(entry: entry, document: match.document, signal: match.signal, guess: match.guess)
     }
 }
