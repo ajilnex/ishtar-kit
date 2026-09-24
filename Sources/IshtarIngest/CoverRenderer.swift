@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import IshtarCatalog
 import QuickLookThumbnailing
 import UniformTypeIdentifiers
 
@@ -9,8 +10,8 @@ import UniformTypeIdentifiers
 /// première page d'un PDF. Même taille que les vignettes de l'application
 /// (120 × 170 pt @2x), si bien que les deux caches sont interchangeables.
 ///
-/// Dette : `ThumbnailService` (ishtar-app) garde sa propre chaîne ; il devra
-/// déléguer ici pour qu'il n'y ait qu'un pipeline (invariant n° 3).
+/// Seul pipeline de couvertures (invariant n° 3) : `ThumbnailService`
+/// (ishtar-app) et la publication passent tous deux par ici.
 public enum CoverRenderer {
     public static let pointSize = CGSize(width: 120, height: 170)
     public static let scale: CGFloat = 2
@@ -18,9 +19,16 @@ public enum CoverRenderer {
     /// PNG de la couverture, ou nil si rien de présentable n'a pu être rendu.
     /// `strictness` (0…1) applique l'examen de la page 1 aux images tirées
     /// d'une page ; nil n'examine rien.
+    ///
+    /// **L'examen ne vise QUE les images tirées d'une page** (PDF, texte,
+    /// DjVu…). Les livres que foliate sait ouvrir (EPUB, MOBI, AZW3…) portent
+    /// une vraie couverture : l'examiner reviendrait à refuser une couverture
+    /// d'éditeur légitimement sobre.
     public static func png(for fileURL: URL, strictness: Double? = nil) async -> Data? {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-        let isPDF = fileURL.pathExtension.lowercased() == "pdf"
+        let format = DocumentFormat(fileName: fileURL.lastPathComponent)
+        let isPDF = format == .pdf
+        let examined = format?.readingEngine == .foliate ? nil : strictness
 
         // Kindle (MOBI, AZW, AZW3) : QuickLook ne sait pas les lire, mais le
         // fichier porte sa couverture — on la prend telle quelle.
@@ -33,10 +41,10 @@ public enum CoverRenderer {
         let request = QLThumbnailGenerator.Request(
             fileAt: fileURL, size: pointSize, scale: scale, representationTypes: .thumbnail)
         if let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request),
-           passes(rep.cgImage, strictness: isPDF ? strictness : nil) {
+           passes(rep.cgImage, strictness: examined) {
             return encode(rep.cgImage)
         }
-        if isPDF, let image = firstPDFPage(fileURL), passes(image, strictness: strictness) {
+        if isPDF, let image = firstPDFPage(fileURL), passes(image, strictness: examined) {
             return encode(image)
         }
         return nil
