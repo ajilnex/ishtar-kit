@@ -107,3 +107,49 @@ struct AuthorityTests {
         #expect(shared.count == 1 && Set(shared[0].entityIds) == [a, b])
     }
 }
+
+@Suite("Réidentification : règles tirées des erreurs relevées le 24/09")
+struct ReidentificationTests {
+    @Test("Noms de fichiers : années antiques et premiers siècles")
+    func ancientYears() {
+        let aristote = FilenameParser.parse(fileName: "Aristote_-350_Traite-du-ciel.pdf")
+        #expect(aristote.author == "Aristote" && aristote.year == "-350" && aristote.title == "Traite du ciel")
+        let tite = FilenameParser.parse(fileName: "Tite-Live_14_Histoire-Romaine.epub")
+        #expect(tite.author == "Tite-Live" && tite.year == "14")
+        // « Chapitre_1_… » n'est pas un auteur daté.
+        #expect(FilenameParser.parse(fileName: "chapitre_1_Introduction.pdf").confidence != .structured)
+        #expect(CiteKeyGenerator.base(author: "Aristote", year: "-350", title: "Traité du ciel") == "Aristote350Traite")
+    }
+
+    @Test("Noms d'auteur : dates, formes inversées, listes")
+    func authorNames() {
+        #expect(TypographyRestorer.normalizedAuthor("Tite-Live (59 av.J.-C. – 17 av.J.-C.)") == "Tite-Live")
+        #expect(TypographyRestorer.normalizedAuthor("Deleuze, Gilles, 1925-1995") == "Gilles Deleuze")
+        #expect(TypographyRestorer.normalizedAuthor("Brunhoff, Suzanne de") == "Suzanne de Brunhoff")
+        #expect(TypographyRestorer.normalizedAuthor("Gilles Deleuze, Félix Guattari") == "Gilles Deleuze, Félix Guattari")
+        #expect(TypographyRestorer.isNameList("Gilles Deleuze, Félix Guattari"))
+        #expect(!TypographyRestorer.isNameList("Nussbaum, Martha C."))
+        #expect(Reidentification.people("Hogrebe, Wolfram;Gabriel, Markus;Hamilton Grant, Iain;") == ["Wolfram Hogrebe", "Markus Gabriel", "Iain Hamilton Grant"])
+        #expect(Reidentification.people("Gilles Deleuze; translated by Martin Joughin") == ["Gilles Deleuze"])
+        #expect(Reidentification.isPlaceholder("NEC Computers International"))
+    }
+
+    @Test("Vote des trois témoins")
+    func vote() {
+        typealias R = AttributionResolution
+        // La fiche « Sellars » d'autrefois cède devant le nom de fichier.
+        #expect(Reidentification.resolve(catalog: "Sellars", file: "Davidson", embedded: nil) == R.replace("Davidson"))
+        #expect(Reidentification.resolve(catalog: "Sellars", file: "Robert", embedded: "Robert Jean-Dominique") == R.replace("Jean-Dominique Robert"))
+        // « Inconnu » prend le nom du fichier.
+        #expect(Reidentification.resolve(catalog: "Inconnu", file: "Brassier", embedded: nil) == R.replace("Brassier"))
+        // Même personne, nom plus complet ; jamais un prénom déplacé depuis la tête.
+        #expect(Reidentification.resolve(catalog: "DeVries", file: "DeVries", embedded: "Willem A. de Vries") == R.enrich("Willem A. de Vries"))
+        #expect(Reidentification.resolve(catalog: "Adin", file: "Adin", embedded: "Adin Steinsaltz") == nil)
+        // Co-auteurs annoncés par le fichier ; éditeurs écartés sinon.
+        #expect(Reidentification.resolve(catalog: "Badiou-Roudinesco", file: "Badiou-Roudinesco", embedded: "Alain Badiou, Elisabeth Roudinesco") == R.split(["Alain Badiou", "Elisabeth Roudinesco"]))
+        #expect(Reidentification.resolve(catalog: "Weiss", file: "Weiss", embedded: "Bernhard Weiss and Jeremy Wanderer") == R.enrich("Bernhard Weiss"))
+        #expect(Reidentification.resolve(catalog: "Merleau-Ponty", file: "Merleau-Ponty", embedded: "Maurice Merleau-Ponty") == R.enrich("Maurice Merleau-Ponty"))
+        // Trois témoins en désaccord : le Sudoc départagera.
+        #expect(Reidentification.resolve(catalog: "Aristotle", file: "Aristote", embedded: "Aristotle") == R.undecided)
+    }
+}

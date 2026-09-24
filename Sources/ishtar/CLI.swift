@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self]
     )
 }
 
@@ -605,6 +605,57 @@ struct Autorites: AsyncParsableCommand {
         if appliquer {
             let shared = try await CatalogStore(db: database).sharedAuthorities(type: .creator, scheme: .idref)
             if !shared.isEmpty { print("\(shared.count) personnes portent plusieurs fiches d'auteur (à fusionner).") }
+        }
+    }
+}
+
+// MARK: - Réidentification
+
+struct Reidentifier: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Relit noms de fichiers et métadonnées avec les règles d'aujourd'hui ; départage les auteurs contradictoires par le Sudoc (--sudoc)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Écrit les relectures (et les conflits tranchés, avec --sudoc).")
+    var appliquer = false
+
+    @Flag(name: .long, help: "Interroge le Sudoc pour départager les conflits d'attribution (réseau).")
+    var sudoc = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let (proposals, conflicts) = try await Reidentification.examine(in: database)
+        print("Relectures : \(proposals.count)")
+        print(String(repeating: "─", count: 60))
+        for p in proposals {
+            print("\(p.fileName) — \(p.current.author ?? "∅") — \(p.current.title) (\(p.current.year ?? "s.d."))")
+            if let t = p.title { print("   titre   → \(t)") }
+            if let d = p.workDate { print("   année   → \(d) (œuvre)") }
+            if let a = p.authorForAnonymous { print("   auteur  → \(a)") }
+            if let r = p.renamedAuthor { print("   nom     → \(r.to)") }
+        }
+        var settled = conflicts
+        if sudoc { settled = await Reidentification.settle(conflicts) }
+        print(String(repeating: "─", count: 60))
+        print("Conflits d'attribution : \(settled.count)")
+        for c in settled {
+            let verdict: String
+            switch c.resolution {
+            case .enrich(let n): verdict = "nom complet → \(n)"
+            case .replace(let n): verdict = "autre auteur → \(n)"
+            case .split(let ns): verdict = "co-auteurs → \(ns.joined(separator: " ; "))"
+            case .undecided: verdict = "INDÉCIS"
+            }
+            print("\(c.fileName)\n   fiche « \(c.catalogAuthor) » · fichier « \(c.fileAuthor ?? "∅") » · métadonnées « \(c.embeddedAuthor ?? "∅") »\n   \(verdict)\(c.settledBySudoc ? " (Sudoc)" : "")")
+        }
+        if appliquer {
+            let n = try await Reidentification.apply(proposals, to: database)
+            let m = try await Reidentification.apply(attributions: settled, to: database)
+            print(String(repeating: "─", count: 60))
+            print("\(n) relectures appliquées, \(m) attributions corrigées.")
         }
     }
 }

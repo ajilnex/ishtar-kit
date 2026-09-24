@@ -63,6 +63,12 @@ public struct Ingestor: Sendable {
             } else {
                 guess = embedded
             }
+            // Le champ auteur d'un fichier porte souvent des dates ou une
+            // fonction entre parenthèses, ou la forme « Nom, Prénom ».
+            if let author = guess.author, !author.contains(";") {
+                let clean = TypographyRestorer.normalizedAuthor(author)
+                guess.author = clean.isEmpty ? nil : clean
+            }
         }
         return guess
     }

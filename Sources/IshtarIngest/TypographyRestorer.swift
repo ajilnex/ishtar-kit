@@ -78,32 +78,64 @@ public enum TypographyRestorer {
         return nil
     }
 
+    /// Un nom d'auteur tel qu'on l'écrit sur une fiche (« Prénom Nom »), tiré
+    /// d'un champ de métadonnées : sans mention entre parenthèses (dates de
+    /// vie, fonction : « Tite-Live (59 av.J.-C. – 17 av.J.-C.) »,
+    /// « Heinrich(Author) Meier »), la forme inversée « Nom, Prénom » remise
+    /// dans l'ordre, un nom en capitales ramené à la casse ordinaire
+    /// (« Erik PORGE » → « Erik Porge »). Pur.
+    public static func normalizedAuthor(_ raw: String) -> String {
+        var name = raw.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: " ", options: .regularExpression)
+            // Dates de vie à la manière des catalogues : « Deleuze, Gilles, 1925-1995 ».
+            .replacingOccurrences(of: #",\s*\d{3,4}\s*-\s*(\d{3,4}|\.{0,4})\s*$"#, with: "", options: .regularExpression)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        // « Büttgen, Philippe » → « Philippe Büttgen » ; mais « Gilles Deleuze,
+        // Félix Guattari » est une liste, pas une forme inversée.
+        if let inverted = invertedForm(name) { name = inverted }
+        return name.split(separator: " ").map { word -> String in
+            let letters = word.filter(\.isLetter)
+            guard letters.count > 1, letters == letters.uppercased() else { return String(word) }
+            return word.lowercased().split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: "-")
+        }.joined(separator: " ")
+    }
+
+    /// Particules qui restent avec le nom de famille : « Brunhoff, Suzanne de ».
+    static let particles: Set<String> = ["de", "du", "des", "d", "la", "le", "von", "van", "der", "den", "di", "da", "del", "della", "ten", "ter"]
+
+    /// « Nom, Prénom » → « Prénom Nom », si c'est bien une forme inversée :
+    /// deux parties, la première d'un mot (ou deux, dont une particule), la
+    /// seconde sans chiffres. Sinon nil (liste de noms, mention de dates…).
+    static func invertedForm(_ name: String) -> String? {
+        let parts = name.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty,
+              !parts[1].contains(where: \.isNumber) else { return nil }
+        let family = parts[0].split(whereSeparator: \.isWhitespace).map(String.init)
+        let given = parts[1].split(whereSeparator: \.isWhitespace)
+        let familyOK = family.count == 1
+            || (family.count == 2 && particles.contains(family[0].lowercased()))
+        guard familyOK, given.count <= 4 else { return nil }
+        return "\(parts[1]) \(parts[0])"
+    }
+
+    /// Plusieurs personnes dans un même champ.
+    public static func isNameList(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        if name.contains(";") || lower.contains(" and ") || name.contains(" & ") || lower.contains(" et ") { return true }
+        return name.contains(",") && invertedForm(name) == nil
+    }
+
     /// Le nom d'auteur à retenir, ou nil. Admis : la même graphie enrichie
     /// (`Buttgen` → `Büttgen`), ou le nom complet dont le dernier mot est le
     /// nom de famille connu (`Buttgen` → `Philippe Büttgen`). Jamais un autre
     /// nom de famille.
     public static func restoredAuthor(current: String, embedded: String?) -> String? {
-        guard var embedded = embedded?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !embedded.isEmpty, embedded != current, !isShouting(embedded)
+        guard let raw = embedded?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty, raw != current, !isShouting(raw)
         else { return nil }
-        // Mentions de fonction collées au nom : « Heinrich(Author) Meier ».
-        embedded = embedded.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: " ", options: .regularExpression)
-            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        // « Büttgen, Philippe » → « Philippe Büttgen »
-        let commaParts = embedded.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        if commaParts.count == 2, !commaParts[0].isEmpty, !commaParts[1].isEmpty {
-            embedded = "\(commaParts[1]) \(commaParts[0])"
-        }
         // Plusieurs auteurs dans le champ : trop ambigu pour une reprise mécanique.
-        if embedded.contains(";") || embedded.contains(" & ") || embedded.lowercased().contains(" and ") { return nil }
-
-        // Un nom de famille en capitales (« Erik PORGE ») : casse ordinaire.
-        embedded = embedded.split(separator: " ").map { word -> String in
-            let letters = word.filter(\.isLetter)
-            guard letters.count > 1, letters == letters.uppercased() else { return String(word) }
-            return word.lowercased().split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: "-")
-        }.joined(separator: " ")
-        guard embedded != current else { return nil }
+        if raw.contains(";") || raw.contains(" & ") || raw.lowercased().contains(" and ") { return nil }
+        let embedded = normalizedAuthor(raw)
+        guard !embedded.isEmpty, embedded != current else { return nil }
 
         let known = skeleton(current)
         guard !known.isEmpty else { return nil }

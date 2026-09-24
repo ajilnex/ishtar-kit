@@ -50,7 +50,8 @@ public enum FilenameParser {
 
     /// Convention `Auteur_Année_Titre` héritée des bibliothèques déjà rangées à la main.
     /// L'année accepte les sans-date (`ND`, `SD`, `s.d.`) — fréquents pour les tapuscrits,
-    /// cours et archives — et un éventuel suffixe de copie `_1`, `_2` est écarté du titre.
+    /// cours et archives —, les années avant notre ère (`-350`) et les premiers siècles
+    /// (`14`) ; un éventuel suffixe de copie `_1`, `_2` est écarté du titre.
     private static func parseAuthorYearTitle(stem: String) -> MetadataGuess? {
         var parts = stem.components(separatedBy: "_")
         guard parts.count >= 3 else { return nil }
@@ -67,6 +68,16 @@ public enum FilenameParser {
 
         let year: String?
         if MetadataPatterns.firstMatch(#"^(1[0-9]{3}|20\d{2})[a-z]?$"#, in: yearToken) != nil {
+            year = yearToken
+        } else if MetadataPatterns.firstMatch(#"^-\d{1,4}$"#, in: yearToken) != nil {
+            // Antiquité : l'année avant notre ère s'écrit négative
+            // (« Aristote_-350_Traite-du-ciel », « Valmiki_-500_Le-Ramayana »).
+            year = yearToken
+        } else if MetadataPatterns.firstMatch(#"^\d{1,3}$"#, in: yearToken) != nil,
+                  author.first?.isUppercase == true, author.allSatisfy({ $0.isLetter || $0 == "-" || $0 == "'" }) {
+            // Premiers siècles de notre ère (« Tite-Live_14_Histoire-Romaine »),
+            // seulement derrière ce qui ressemble à un nom — « Chapitre_1_… »
+            // n'est pas un auteur.
             year = yearToken
         } else if ["nd", "n.d.", "sd", "s.d."].contains(yearToken.lowercased()) {
             year = nil

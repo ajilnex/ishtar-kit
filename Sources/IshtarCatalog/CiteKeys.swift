@@ -91,9 +91,13 @@ public enum CiteKeyGenerator {
     }
 
     /// Les quatre chiffres d'une année (« 1951 », « c. 1951 », « 1951-1953 »),
-    /// sinon nil.
+    /// sinon nil. Une année ancienne, seule dans le champ (« -350 » avant
+    /// notre ère, « 14 »), rend ses chiffres sans signe : `Aristote350Traite`
+    /// (le trait d'union est réservé à l'année d'édition).
     static func year(_ value: String?) -> String? {
         guard let value else { return nil }
+        let bare = value.trimmingCharacters(in: .whitespaces)
+        if let match = bare.wholeMatch(of: /-?(\d{1,3})/) { return String(match.1) }
         var digits = ""
         for character in value {
             if character.isNumber, character.isASCII {
