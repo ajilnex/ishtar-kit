@@ -58,6 +58,7 @@ public enum Reidentification {
             path: String, format: DocumentFormat
         let publisher: String?, language: String?, isbn13: String?, doi: String?
         var authorCount = 0
+        var documentCount = 1
     }
 
     static func currentRecords(in db: CatalogDatabase) async throws -> [Current] {
@@ -71,7 +72,9 @@ public enum Reidentification {
                          WHERE wc.workId = w.id AND wc.role = 'author' ORDER BY wc.position LIMIT 1) AS author,
                        d.filePath AS path, d.format AS format,
                        e.publisher AS publisher, e.language AS language, e.isbn13 AS isbn13, e.doi AS doi,
-                       (SELECT count(*) FROM work_creator wc WHERE wc.workId = w.id AND wc.role = 'author') AS authorCount
+                       (SELECT count(*) FROM work_creator wc WHERE wc.workId = w.id AND wc.role = 'author') AS authorCount,
+                       (SELECT count(*) FROM edition e2 JOIN document d2 ON d2.editionId = e2.id
+                         WHERE e2.workId = w.id AND d2.isMissing = 0) AS documentCount
                 FROM document d JOIN edition e ON e.id = d.editionId JOIN work w ON w.id = e.workId
                 WHERE d.isMissing = 0 AND d.confidence != 'high' AND w.confidence != 'high'
                 ORDER BY d.filePath
@@ -82,7 +85,7 @@ public enum Reidentification {
                                year: row["year"], workDate: row["workDate"],
                                path: row["path"], format: format, publisher: row["publisher"],
                                language: row["language"], isbn13: row["isbn13"], doi: row["doi"],
-                               authorCount: row["authorCount"])
+                               authorCount: row["authorCount"], documentCount: row["documentCount"])
             }
         }
     }
@@ -114,10 +117,16 @@ public enum Reidentification {
     static func proposal(for c: Current, guess: MetadataGuess) -> ReidentificationProposal? {
         let cleanTitle = withoutVendorNoise(c.title)
         var title: String? = cleanTitle != c.title ? cleanTitle : nil
-        if !guess.title.isEmpty, !AuthorityPass.sameTitle(cleanTitle, guess.title) { title = guess.title }
-
         let original = c.workDate ?? c.year
-        let workDate = guess.year.flatMap { $0 != original ? $0 : nil }
+        var workDate: String?
+        // Une œuvre à plusieurs fichiers (éditions réunies, formats, jumeaux) :
+        // chaque nom de fichier ne parle que de son édition — l'année de
+        // `Nietzsche_2011_…` n'est pas celle du *Gai Savoir*. Titre et année
+        // de l'œuvre ne se relisent que sur une œuvre à un seul fichier.
+        if c.documentCount <= 1 {
+            if !guess.title.isEmpty, !AuthorityPass.sameTitle(cleanTitle, guess.title) { title = guess.title }
+            workDate = guess.year.flatMap { $0 != original ? $0 : nil }
+        }
 
         var authorForAnonymous: String?
         var renamed: (creatorId: UUID, from: String, to: String)?
@@ -369,7 +378,9 @@ public enum Reidentification {
                 continue
             }
             // Conflit : les témoins de l'auteur ne s'accordent pas.
-            guard c.authorCount == 1, let current = c.author, let creatorId = c.authorId,
+            // Plusieurs fichiers d'une même œuvre dont les noms se contredisent :
+            // l'un ment forcément ; seul le contenu tranche (ContentCheck, lecture).
+            guard c.authorCount == 1, c.documentCount <= 1, let current = c.author, let creatorId = c.authorId,
                   !seenWorks.contains(c.workId) else { continue }
             let fileAuthor = guess.confidence == .structured ? guess.author : nil
             let embedded = EmbeddedMetadata.read(fileURL: url, format: c.format)

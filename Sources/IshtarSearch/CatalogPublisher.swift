@@ -39,6 +39,8 @@ public struct PublishedEdition: Codable, Sendable, Equatable {
     public var authors: [String]
     /// Les mêmes auteurs, avec forme de classement et notices (lot F, v8).
     public var people: [PublishedPerson]?
+    /// « livre » ou « article » (chapitres et communications compris).
+    public var kind: String?
     /// Année de l'œuvre.
     public var year: String?
     /// Année de cette édition, quand elle diffère de celle de l'œuvre.
@@ -135,7 +137,19 @@ public struct CatalogPublisher: Sendable {
         let rootPath = URL(fileURLWithPath: root).standardizedFileURL.path
         let rows = try await LibraryOverview(db: db).rows()
 
-        let (keys, collectionPaths, people) = try await db.pool.read { conn -> ([UUID: String], [UUID: [String]], [UUID: [PublishedPerson]]) in
+        let (keys, collectionPaths, people, kinds) = try await db.pool.read { conn -> ([UUID: String], [UUID: [String]], [UUID: [PublishedPerson]], [UUID: DocumentKind]) in
+            // Le genre de chaque document : format, nombre de pages, marques des premières pages.
+            var kinds: [UUID: DocumentKind] = [:]
+            for row in try Row.fetchAll(conn, sql: """
+                SELECT d.id AS id, d.format AS format,
+                       (SELECT count(*) FROM document_page p WHERE p.documentId = d.id) AS pages,
+                       (SELECT group_concat(substr(content, 1, 2500), ' ') FROM (SELECT content FROM document_page p
+                          WHERE p.documentId = d.id AND p.pageNumber BETWEEN 1 AND 4 ORDER BY p.pageNumber)) AS opening
+                FROM document d WHERE d.isMissing = 0
+                """) {
+                guard let format = DocumentFormat(rawValue: row["format"]) else { continue }
+                kinds[row["id"]] = DocumentKind.classify(format: format, pages: row["pages"], opening: row["opening"] ?? "")
+            }
             var keys: [UUID: String] = [:]
             for key in try EditionKey.fetchAll(conn) { keys[key.editionId] = key.key }
             var links: [UUID: [String: String]] = [:]
@@ -164,7 +178,7 @@ public struct CatalogPublisher: Sendable {
                 let name: String = row["name"]
                 paths[workId, default: []].append(path ?? name)
             }
-            return (keys, paths, people)
+            return (keys, paths, people, kinds)
         }
 
         var report = PublicationReport()
@@ -201,6 +215,7 @@ public struct CatalogPublisher: Sendable {
                 subtitle: row.work.subtitle,
                 authors: row.authors,
                 people: people[row.work.id].flatMap { $0.isEmpty ? nil : $0 },
+                kind: (kinds[document.id] ?? .livre).rawValue,
                 year: workYear ?? edition.year,
                 editionYear: (workYear != nil && edition.year != workYear) ? edition.year : nil,
                 publisher: edition.publisher,

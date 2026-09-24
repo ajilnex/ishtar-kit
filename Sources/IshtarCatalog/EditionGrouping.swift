@@ -194,8 +194,9 @@ public enum EditionGrouping {
 
     // MARK: Une œuvre, plusieurs éditions
 
-    /// Le même livre (même auteur, même titre) à des années différentes :
-    /// deux éditions d'une seule œuvre (« Logic of the Future », 2019 et 2021).
+    /// Le même livre (même auteur, même titre) en plusieurs fiches d'œuvre :
+    /// deux éditions d'une seule œuvre (« Logic of the Future », 2019 et 2021),
+    /// ou deux formats ingérés séparément.
     /// Chaque groupe : l'œuvre gardée d'abord (la plus ancienne), puis les
     /// œuvres dont les éditions la rejoignent.
     public static func workProposals(in db: CatalogDatabase) async throws -> [(kept: UUID, absorbed: [UUID], title: String, years: [String])] {
@@ -204,7 +205,11 @@ public enum EditionGrouping {
                 SELECT w.id AS workId, w.title AS title, w.confidence AS confidence,
                        COALESCE(w.date, (SELECT MIN(e.year) FROM edition e WHERE e.workId = w.id)) AS year,
                        (SELECT c.name FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
-                         WHERE wc.workId = w.id AND wc.role = 'author' ORDER BY wc.position LIMIT 1) AS author
+                         WHERE wc.workId = w.id AND wc.role = 'author' ORDER BY wc.position LIMIT 1) AS author,
+                       (SELECT group_concat(content, ' ') FROM (SELECT p.content FROM document_page p
+                          JOIN document d ON d.id = p.documentId JOIN edition e ON e.id = d.editionId
+                          WHERE e.workId = w.id AND d.isMissing = 0 AND p.pageNumber BETWEEN 1 AND 10
+                          ORDER BY p.pageNumber LIMIT 10)) AS opening
                 FROM work w
                 WHERE EXISTS (SELECT 1 FROM edition e JOIN document d ON d.editionId = e.id
                               WHERE e.workId = w.id AND d.isMissing = 0)
@@ -217,8 +222,19 @@ public enum EditionGrouping {
                 byAuthor[family, default: []].append(row)
             }
             return byAuthor.values.flatMap(clusters).compactMap { members in
-                let years = Set(members.compactMap { CiteKeyGenerator.year($0["year"]) })
-                guard members.count > 1, years.count > 1 else { return nil }
+                // Deux œuvres du même auteur et du même titre sont une seule
+                // œuvre, que leurs années diffèrent (éditions successives) ou
+                // non (formats ingérés séparément : Aristophane en EPUB et MOBI).
+                guard members.count > 1 else { return nil }
+                // Le texte témoigne : chaque membre qui a un texte doit nommer
+                // l'auteur dans ses premières pages (« The Legacy of Kant » de
+                // Gironi n'est pas l'article de Stovall rangé sous son nom).
+                for m in members {
+                    guard let opening: String = m["opening"], opening.count >= 300,
+                          let author: String = m["author"], let family = CiteKeyGenerator.family(author)?.lowercased()
+                    else { continue }
+                    if !skeleton(opening).contains(family) { return nil }
+                }
                 let sorted = members.sorted { a, b in
                     let ha = (a["confidence"] as String) == "high" ? 0 : 1, hb = (b["confidence"] as String) == "high" ? 0 : 1
                     return (ha, (a["year"] as String?) ?? "9999") < (hb, (b["year"] as String?) ?? "9999")

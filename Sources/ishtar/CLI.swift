@@ -872,8 +872,14 @@ struct Corriger: AsyncParsableCommand {
 
     struct Correction: Decodable {
         let fichier: String
-        let titre: String
-        let auteurs: [String]
+        /// Vrai : ce n'est pas un livre (papier personnel, rapport, note) —
+        /// le fichier rejoint `_NON_BIBLIO/`, à côté de lui ; rien d'autre.
+        let nonBiblio: Bool?
+        /// Vrai : le fichier a été rattaché à tort à une autre œuvre ; il
+        /// reçoit d'abord une fiche à lui, puis la correction.
+        let detacher: Bool?
+        let titre: String?
+        let auteurs: [String]?
         let annee: String?
         let edition: String?
         let editeur: String?
@@ -901,13 +907,37 @@ struct Corriger: AsyncParsableCommand {
         let day = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
         var done = 0
         for c in corrections {
+            if c.detacher == true, appliquer, let first = try await store.document(named: c.fichier) {
+                try await store.detach(documentId: first.documentId)
+            }
             guard let target = try await store.document(named: c.fichier) else {
                 print("introuvable ou ambigu : \(c.fichier)"); continue
             }
-            print("\(c.fichier)\n   → \(c.auteurs.joined(separator: " ; ")) — \(c.titre) (\(c.annee ?? "s.d."))")
+            if c.nonBiblio == true {
+                print("\(c.fichier)\n   → _NON_BIBLIO")
+                guard appliquer, let path = try await store.path(ofDocument: target.documentId) else { continue }
+                let dir = (path as NSString).deletingLastPathComponent
+                let destination = ((dir as NSString).appendingPathComponent("_NON_BIBLIO") as NSString)
+                    .appendingPathComponent((path as NSString).lastPathComponent)
+                try FileManager.default.createDirectory(atPath: (destination as NSString).deletingLastPathComponent,
+                                                        withIntermediateDirectories: true)
+                let move = Renaming(documentId: target.documentId, from: path, to: destination)
+                if try await store.perform(move) {
+                    let journal = "\(NSHomeDirectory())/Library/Logs/ishtar-ranger.tsv"
+                    if !FileManager.default.fileExists(atPath: journal) { FileManager.default.createFile(atPath: journal, contents: nil) }
+                    let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: journal))
+                    try handle.seekToEnd()
+                    try handle.write(contentsOf: Data("\(move.documentId.uuidString)\t\(move.from)\t\(move.to)\n".utf8))
+                    try handle.close()
+                    done += 1
+                }
+                continue
+            }
+            guard let titre = c.titre, let auteurs = c.auteurs else { print("   titre ou auteurs manquants"); continue }
+            print("\(c.fichier)\n   → \(auteurs.joined(separator: " ; ")) — \(titre) (\(c.annee ?? "s.d."))")
             guard appliquer else { continue }
             try await store.applyUserEdit(workId: target.workId, editionId: target.editionId, documentId: target.documentId,
-                                          edit: RecordEdit(title: c.titre, authors: c.auteurs, year: c.edition ?? c.annee,
+                                          edit: RecordEdit(title: titre, authors: auteurs, year: c.edition ?? c.annee,
                                                            publisher: c.editeur, language: c.langue, isbn13: c.isbn))
             let note = "Vérifié sur pièce le \(day) (\(par))" + (c.preuve.map { " : \($0)" } ?? ".")
             try await store.annotateWork(target.workId, date: c.annee, note: note)

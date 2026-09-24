@@ -156,4 +156,9 @@ extension CatalogStore {
         }
         return true
     }
+
+    /// Le chemin d'un document.
+    public func path(ofDocument id: UUID) async throws -> String? {
+        try await db.pool.read { try String.fetchOne($0, sql: "SELECT filePath FROM document WHERE id = ?", arguments: [id]) }
+    }
 }
