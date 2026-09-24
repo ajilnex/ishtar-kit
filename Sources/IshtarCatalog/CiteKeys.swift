@@ -157,11 +157,16 @@ public enum CiteKeyGenerator {
 
     /// Une clé libre à partir de `base`. `editionYear` départage d'abord ;
     /// ensuite `-b`, `-c`… La comparaison ignore la casse, comme la base.
-    public static func unique(base: String, editionYear: String?, taken: Set<String>) -> String {
+    public static func unique(base: String, editionYear: String?, language: String? = nil, taken: Set<String>) -> String {
         let lowered = Set(taken.map { $0.lowercased() })
         if !lowered.contains(base.lowercased()) { return base }
         if let edition = year(editionYear) {
             let candidate = "\(base)-\(edition)"
+            if !lowered.contains(candidate.lowercased()) { return candidate }
+        }
+        // Une traduction se distingue par sa langue : `Cesaire1950Discours-en`.
+        if let language, language.count == 2, language.allSatisfy(\.isLetter) {
+            let candidate = "\(base)-\(language.lowercased())"
             if !lowered.contains(candidate.lowercased()) { return candidate }
         }
         for letter in "bcdefghijklmnopqrstuvwxyz" {
@@ -207,6 +212,7 @@ extension EditionKey {
 
         let rows = try Row.fetchAll(db, sql: """
             SELECT e.id AS editionId, e.workId AS workId, e.year AS editionYear, w.date AS workDate, w.title AS title,
+                   e.language AS language, w.originalLanguage AS originalLanguage,
                    (SELECT c.name FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
                      WHERE wc.workId = w.id
                      ORDER BY (wc.role = 'author') DESC, wc.position LIMIT 1) AS author
@@ -227,7 +233,7 @@ extension EditionKey {
             existing[base, default: []].append((row["workId"], row["title"]))
         }
 
-        struct Pending { let id: UUID; var base: String; let editionYear: String?; var sort: String; let work: UUID; let title: String; let rank: String }
+        struct Pending { let id: UUID; var base: String; let editionYear: String?; var sort: String; let work: UUID; let title: String; let rank: String; let language: String? }
         var pending: [Pending] = rows.map { row in
             let id: UUID = row["editionId"]
             let workDate: String? = row["workDate"]
@@ -242,10 +248,15 @@ extension EditionKey {
             let distinctEditionYear = (workDate != nil && editionYear != workDate) ? editionYear : nil
             // À base égale, la clé nue va d'abord à l'édition sans année propre ;
             // les éditions datées prennent ensuite leur suffixe d'année.
-            let rank = distinctEditionYear.map { "1\($0)" } ?? "0"
+            // L'édition dans la langue originale d'abord : c'est elle qui porte
+            // la clé nue ; les traductions prennent leur année ou leur langue.
+            let language: String? = row["language"]
+            let originalLanguage: String? = row["originalLanguage"]
+            let translation = originalLanguage != nil && language != nil && language != originalLanguage
+            let rank = (translation ? "1" : "0") + (distinctEditionYear.map { "1\($0)" } ?? "0")
             return Pending(id: id, base: base, editionYear: distinctEditionYear,
                            sort: "\(base)\u{1}\(rank)\u{1}\(id.uuidString)",
-                           work: row["workId"], title: title, rank: rank)
+                           work: row["workId"], title: title, rank: rank, language: translation ? language : nil)
         }
 
         // Deux livres différents de même base : chacun prend le mot de titre
@@ -268,7 +279,7 @@ extension EditionKey {
         }
 
         for item in pending.sorted(by: { $0.sort < $1.sort }) {
-            let key = CiteKeyGenerator.unique(base: item.base, editionYear: item.editionYear, taken: taken)
+            let key = CiteKeyGenerator.unique(base: item.base, editionYear: item.editionYear, language: item.language, taken: taken)
             try EditionKey(editionId: item.id, key: key, origin: .generated, dateAssigned: now).insert(db)
             taken.insert(key)
         }
