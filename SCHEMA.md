@@ -131,3 +131,48 @@ Additive, après v5.
   - Décision utilisateur : un document introuvable reste au catalogue avec son travail intellectuel (fiches, surlignements, liens et projets conservés).
   - Aucune suppression automatique lors d'une absence physique ou d'un scan incomplet.
   - La colonne `isMissing` passe à `true` lorsque le fichier n'est plus vu lors d'un scan complet fiable, et repasse à `false` dès sa réapparition ou son déplacement non ambigu.
+
+## Migration v7 — Clés de citation (lot F2)
+
+Additive, après v6.
+
+- **edition_key** — la clé de citation d'une édition (`Adorno1951Minima`).
+  - `editionId` → `edition(id)` (clé primaire, `ON DELETE CASCADE`).
+  - `key` : `UNIQUE`, comparée **sans égard à la casse** (`COLLATE NOCASE`).
+  - `origin` : `generated` (calculée) ou `manual` (saisie par l'utilisateur).
+  - `dateAssigned`.
+- Forme générée (`CiteKeyGenerator`) : nom de famille du premier auteur,
+  année de l'œuvre (`work.date`, à défaut `edition.year`, sinon `ND`),
+  premier mot significatif du titre — translittérés en ASCII, capitalisés.
+  Collision : suffixe `-<année d'édition>` si elle diffère de celle de
+  l'œuvre, sinon `-b`, `-c`…
+- **Règle cardinale : une clé attribuée ne change plus d'elle-même.** Elle
+  circule hors d'Ishtar (Zotero, sites, BibTeX). Corriger une fiche ne la
+  recalcule pas ; seule une correction de la clé elle-même la remplace
+  (`origin = manual`). L'ingestion attribue une clé à toute édition nouvelle.
+
+## Catalogue publié — format d'échange (lot F3)
+
+`ishtar publish` écrit, dans un dossier choisi par l'utilisateur, un
+instantané lisible sans Ishtar :
+
+- `catalogue.json` — le manifeste, écrit **en dernier** (un lecteur ne voit
+  jamais un manifeste qui annonce des fichiers absents) :
+  ```
+  { "version": 1, "generatedAt": "<ISO 8601>", "library": "<nom du dossier>",
+    "editions": [ { "key", "title", "subtitle"?, "authors": [..],
+                    "year"?, "editionYear"?, "publisher"?, "language"?,
+                    "isbn13"?, "doi"?, "discipline"?, "collections": [..],
+                    "status", "confidence", "dateAdded",
+                    "files": [ { "sha256", "path", "format", "size" } ] } ] }
+  ```
+  `path` est **relatif** à la racine de la bibliothèque. `year` est l'année
+  de l'œuvre ; `editionYear` n'apparaît que si elle en diffère.
+- `covers/<sha256>.png` — les vignettes d'Ishtar, par empreinte de fichier.
+- `catalog.sqlite` — copie de ce schéma **réduite aux documents publiés**
+  (textes extraits compris) ; les conversations du démon en sont retirées.
+
+Ne sont jamais publiés : les documents introuvables ou ignorés, ceux sans
+empreinte, ceux hors de la racine, et ce qu'excluent les règles de
+l'utilisateur (`--exclude <dossier>`, `--exclude-title-prefix <préfixe>`).
+Une même empreinte n'est publiée qu'une fois.

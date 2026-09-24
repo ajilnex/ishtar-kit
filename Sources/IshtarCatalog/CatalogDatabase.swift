@@ -229,6 +229,20 @@ public final class CatalogDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v7_edition_keys") { db in
+            // Clé de citation d'une édition (lot F2). Table à part : la clé a sa
+            // propre vie (origine, stabilité), et la fiche Édition reste intacte.
+            // Unique sans égard à la casse : « adorno1951minima » et
+            // « Adorno1951Minima » désigneraient la même chose pour un lecteur.
+            try db.create(table: "edition_key") { t in
+                t.column("editionId", .text).primaryKey()
+                    .references("edition", onDelete: .cascade)
+                t.column("key", .text).notNull().unique().collate(.nocase)
+                t.column("origin", .text).notNull()
+                t.column("dateAssigned", .datetime).notNull()
+            }
+        }
+
         // Les migrations suivantes (embeddings, artéfacts) arrivent avec les jalons M3–M4.
 
         return migrator

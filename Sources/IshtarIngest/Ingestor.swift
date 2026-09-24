@@ -289,6 +289,9 @@ public struct Ingestor: Sendable {
             try dbConn.execute(sql: """
                 DELETE FROM work WHERE id NOT IN (SELECT DISTINCT workId FROM edition)
                 """)
+
+            // 6. Toute édition née de ce scan ressort avec sa clé de citation.
+            try EditionKey.assignMissing(dbConn)
         }
 
         return result
