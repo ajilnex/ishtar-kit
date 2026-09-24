@@ -92,6 +92,9 @@ public struct PublicationReport: Sendable, Equatable {
     public var covers = 0
     public var excludedByRule = 0
     public var excludedMissingOrIgnored = 0
+    /// Vrai si le manifeste existant disait déjà la même chose : il n'a pas
+    /// été réécrit (rien à transporter, rien à recharger côté serveur).
+    public var unchanged = false
 }
 
 public struct CatalogPublisher: Sendable {
@@ -260,12 +263,27 @@ public struct CatalogPublisher: Sendable {
         }
         report.covers = wanted.count
 
-        // 3. Le manifeste, en dernier.
+        // 3. Le manifeste, en dernier — et seulement s'il a changé : une
+        // publication régulière ne doit rien transporter quand rien n'a bougé.
+        // On compare le texte même du fichier (les dates ISO 8601 perdent leurs
+        // fractions de seconde : comparer des valeurs relues serait faux).
+        let manifest = outputFolder.appendingPathComponent("catalogue.json")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let existing = try? Data(contentsOf: manifest),
+           let old = try? decoder.decode(PublishedCatalogue.self, from: existing) {
+            var same = catalogue
+            same.generatedAt = old.generatedAt
+            if try encoder.encode(same) == existing {
+                report.unchanged = true
+                return report
+            }
+        }
         let data = try encoder.encode(catalogue)
-        try data.write(to: outputFolder.appendingPathComponent("catalogue.json"), options: .atomic)
+        try data.write(to: manifest, options: .atomic)
         return report
     }
 

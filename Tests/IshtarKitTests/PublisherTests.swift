@@ -97,9 +97,12 @@ struct PublisherTests {
         let paths = try await snapshot.read { try String.fetchAll($0, sql: "SELECT filePath FROM document") }
         #expect(paths == ["\(root)/Adorno_1951_Minima.pdf"])
 
-        // Republier est idempotent et remplace proprement.
+        // Republier sans changement ne réécrit pas le manifeste.
+        let date = try fm.attributesOfItem(atPath: out.appendingPathComponent("catalogue.json").path)[.modificationDate] as? Date
         let again = try await CatalogPublisher(db: db)
             .publish(root: root, rules: rules, to: out, coversFolder: covers, includeDatabase: true)
-        #expect(again == report)
+        #expect(again.unchanged)
+        #expect(again.editions == report.editions)
+        #expect(try fm.attributesOfItem(atPath: out.appendingPathComponent("catalogue.json").path)[.modificationDate] as? Date == date)
     }
 }

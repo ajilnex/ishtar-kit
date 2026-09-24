@@ -492,7 +492,8 @@ struct Publish: AsyncParsableCommand {
             report = try await publisher.publish(root: root, rules: rules, to: out, coversFolder: covers,
                                                  includeDatabase: withDatabase, fonds: provenance, renderCover: render)
         }
-        print(dryRun ? "Publication (essai à blanc)" : "Publié dans \(out.path)")
+        print(dryRun ? "Publication (essai à blanc)"
+              : report.unchanged ? "Rien de changé : \(out.path) est à jour" : "Publié dans \(out.path)")
         print(String(repeating: "─", count: 60))
         print("Éditions publiées        \(report.editions)")
         print("Fichiers                 \(report.files)")
