@@ -195,3 +195,24 @@ struct KeyAndGroupingRulesTests {
         #expect(EditionGrouping.volume("Anna Karénine - Tome II") == "ii")
     }
 }
+
+@Suite("Noms d'auteur : forme d'usage et forme de classement (NORMES §6)")
+struct AuthorityNameTests {
+    @Test("Forme de classement tirée de l'autorité, particules comprises")
+    func sortNames() {
+        #expect(AuthorityNames.sortName(display: "Theodor W. Adorno", authorityLabel: "Adorno, Theodor Wiesengrund (1903-1969)") == "Adorno, Theodor W.")
+        #expect(AuthorityNames.sortName(display: "Simone de Beauvoir", authorityLabel: "Beauvoir, Simone de (1908-1986)") == "Beauvoir, Simone de")
+        #expect(AuthorityNames.sortName(display: "Jean de La Fontaine", authorityLabel: "La Fontaine, Jean de (1621-1695)") == "La Fontaine, Jean de")
+        #expect(AuthorityNames.sortName(display: "Maurice Merleau-Ponty", authorityLabel: "Merleau-Ponty, Maurice (1908-1961)") == "Merleau-Ponty, Maurice")
+        #expect(AuthorityNames.sortName(display: "Platon", authorityLabel: "Platon (0427?-0348? av. J.-C.)") == "Platon")
+        #expect(AuthorityNames.sortName(display: "Sun Tzu", authorityLabel: "Sunzi (0544?-0496? av. J.-C.)") == nil)
+        #expect(AuthorityNames.natural(authorityLabel: "Adorno, Theodor Wiesengrund (1903-1969)") == "Theodor Wiesengrund Adorno")
+    }
+
+    @Test("Libellés Wikidata : français d'abord")
+    func labels() {
+        let json = #"{"entities":{"Q152388":{"labels":{"fr":{"value":"Theodor W. Adorno"},"en":{"value":"Theodor W. Adorno"}}},"Q859":{"labels":{"en":{"value":"Plato"}}}}}"#
+        let l = WikidataConnector.parse(labels: Data(json.utf8))
+        #expect(l["Q152388"] == "Theodor W. Adorno" && l["Q859"] == "Plato")
+    }
+}

@@ -151,6 +151,32 @@ Additive, après v6.
   recalcule pas ; seule une correction de la clé elle-même la remplace
   (`origin = manual`). L'ingestion attribue une clé à toute édition nouvelle.
 
+## Migration v8 — Liens d'autorité (lot F, 24/09)
+
+Table `authority_link` (clé : `entityType`, `entityId`, `scheme`,
+`identifier`) :
+
+- `entityType` : `creator` | `work` ; `entityId` : l'identifiant de la fiche.
+- `scheme` : `idref` (PPN) | `bnf` (`ark:/12148/…`) | `viaf` | `isni` |
+  `wikidata` (`Q…`).
+- `label` : la forme autorisée (« Adorno, Theodor Wiesengrund (1903-1969) »).
+- `status` : `proposed` (trouvé, à valider) | `confirmed` (validé, ou prouvé
+  par un livre possédé) | `rejected` (écarté, ne plus reproposer). Un lien
+  n'est jamais rétrogradé par une machine.
+- `evidence` : la preuve, en clair (« auteur de « Minima moralia » dans le
+  Sudoc »).
+
+Deux fiches d'auteur reliées à la même notice sont une seule personne
+(`CatalogStore.sharedAuthorities`) ; `renameCreator` les fusionne.
+
+**Clés (révision du 24/09)** : l'année de la base est celle de l'œuvre
+(`work.date`), sinon celle de l'édition ; une année antique s'écrit sans
+signe (`Aristote350Traite`). Deux œuvres différentes de même base prennent
+chacune le mot de titre qui les distingue (`Rosenberg2007WilfridFusing`,
+`Tolstoy1877AnnaII`) ; les éditions d'une même œuvre se départagent par
+l'année d'édition (`-2003`), puis `-b`. `ishtar keys --recalculer` refait
+toutes les clés provisoires ; les clés figées et manuelles ne bougent jamais.
+
 ## Catalogue publié — format d'échange (lot F3)
 
 `ishtar publish` écrit, dans un dossier choisi par l'utilisateur, un

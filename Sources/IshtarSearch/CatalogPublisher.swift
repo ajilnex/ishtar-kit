@@ -37,6 +37,8 @@ public struct PublishedEdition: Codable, Sendable, Equatable {
     public var title: String
     public var subtitle: String?
     public var authors: [String]
+    /// Les mêmes auteurs, avec forme de classement et notices (lot F, v8).
+    public var people: [PublishedPerson]?
     /// Année de l'œuvre.
     public var year: String?
     /// Année de cette édition, quand elle diffère de celle de l'œuvre.
@@ -52,6 +54,25 @@ public struct PublishedEdition: Codable, Sendable, Equatable {
     public var confidence: String
     public var dateAdded: Date
     public var files: [PublishedFile]
+}
+
+/// Un auteur, avec sa forme de classement et ses notices d'autorité
+/// confirmées (NORMES §6 : « Prénom Nom » pour présenter, « Nom, Prénom »
+/// pour classer).
+public struct PublishedPerson: Codable, Sendable, Equatable {
+    public var name: String
+    public var sortName: String?
+    public var idref: String?
+    public var bnf: String?
+    public var wikidata: String?
+
+    public init(name: String, sortName: String? = nil, idref: String? = nil, bnf: String? = nil, wikidata: String? = nil) {
+        self.name = name
+        self.sortName = sortName
+        self.idref = idref
+        self.bnf = bnf
+        self.wikidata = wikidata
+    }
 }
 
 public struct PublishedFile: Codable, Sendable, Equatable {
@@ -114,9 +135,25 @@ public struct CatalogPublisher: Sendable {
         let rootPath = URL(fileURLWithPath: root).standardizedFileURL.path
         let rows = try await LibraryOverview(db: db).rows()
 
-        let (keys, collectionPaths) = try await db.pool.read { conn -> ([UUID: String], [UUID: [String]]) in
+        let (keys, collectionPaths, people) = try await db.pool.read { conn -> ([UUID: String], [UUID: [String]], [UUID: [PublishedPerson]]) in
             var keys: [UUID: String] = [:]
             for key in try EditionKey.fetchAll(conn) { keys[key.editionId] = key.key }
+            var links: [UUID: [String: String]] = [:]
+            for link in try AuthorityLink.filter(Column("entityType") == AuthorityLink.EntityType.creator
+                                                 && Column("status") == AuthorityLink.Status.confirmed).fetchAll(conn) {
+                links[link.entityId, default: [:]][link.scheme.rawValue] = link.identifier
+            }
+            var people: [UUID: [PublishedPerson]] = [:]
+            for row in try Row.fetchAll(conn, sql: """
+                SELECT wc.workId AS workId, c.id AS id, c.name AS name, c.sortName AS sortName
+                FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
+                WHERE wc.role = 'author' ORDER BY wc.workId, wc.position
+                """) {
+                let id: UUID = row["id"]
+                let l = links[id] ?? [:]
+                people[row["workId"], default: []].append(PublishedPerson(
+                    name: row["name"], sortName: row["sortName"], idref: l["idref"], bnf: l["bnf"], wikidata: l["wikidata"]))
+            }
             var paths: [UUID: [String]] = [:]
             for row in try Row.fetchAll(conn, sql: """
                 SELECT ci.workId AS workId, c.sourceFolderPath AS path, c.name AS name
@@ -127,7 +164,7 @@ public struct CatalogPublisher: Sendable {
                 let name: String = row["name"]
                 paths[workId, default: []].append(path ?? name)
             }
-            return (keys, paths)
+            return (keys, paths, people)
         }
 
         var report = PublicationReport()
@@ -163,6 +200,7 @@ public struct CatalogPublisher: Sendable {
                 title: edition.title ?? row.work.title,
                 subtitle: row.work.subtitle,
                 authors: row.authors,
+                people: people[row.work.id].flatMap { $0.isEmpty ? nil : $0 },
                 year: workYear ?? edition.year,
                 editionYear: (workYear != nil && edition.year != workYear) ? edition.year : nil,
                 publisher: edition.publisher,

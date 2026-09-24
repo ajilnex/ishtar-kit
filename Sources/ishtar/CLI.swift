@@ -603,6 +603,9 @@ struct Autorites: AsyncParsableCommand {
     @Option(name: .long, help: "N'examiner que les N premiers auteurs en attente.")
     var limite: Int?
 
+    @Flag(name: .long, help: "Met les noms des auteurs reliés à la forme de leur autorité (usage + classement) ; fusionne les doublons de personne.")
+    var noms = false
+
     func run() async throws {
         let database = try CatalogDatabase(at: db)
         let outcomes = try await AuthorityPass.run(in: database, apply: appliquer, limit: limite) { o in
@@ -616,9 +619,15 @@ struct Autorites: AsyncParsableCommand {
         let proposed = outcomes.filter { if case .proposed = $0.decision { true } else { false } }.count
         print(String(repeating: "─", count: 60))
         print("\(outcomes.count) auteurs examinés : \(confirmed) confirmés, \(proposed) à valider, \(outcomes.count - confirmed - proposed) introuvables.")
-        if appliquer {
-            let shared = try await CatalogStore(db: database).sharedAuthorities(type: .creator, scheme: .idref)
-            if !shared.isEmpty { print("\(shared.count) personnes portent plusieurs fiches d'auteur (à fusionner).") }
+        if noms {
+            let names = try await AuthorityNames.proposals(in: database)
+            print(String(repeating: "─", count: 60))
+            print("Noms à la forme de leur autorité : \(names.count)")
+            for n in names { print("\(n.current)  →  \(n.name)   [\(n.sortName)]") }
+            if appliquer {
+                try await AuthorityNames.apply(names, to: database)
+                print("Appliqué.")
+            }
         }
     }
 }

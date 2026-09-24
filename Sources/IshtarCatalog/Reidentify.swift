@@ -101,4 +101,11 @@ extension CatalogStore {
             return true
         }
     }
+
+    /// La forme de classement d'une personne (« Adorno, Theodor W. »).
+    public func setSortName(_ sortName: String?, forCreator id: UUID) async throws {
+        try await db.pool.write { conn in
+            try conn.execute(sql: "UPDATE creator SET sortName = ? WHERE id = ?", arguments: [sortName, id])
+        }
+    }
 }
