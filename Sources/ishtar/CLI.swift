@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self]
+                      Keys.self, Publish.self, Typographie.self]
     )
 }
 
@@ -492,5 +492,40 @@ struct Publish: AsyncParsableCommand {
         print("Couvertures              \(report.covers)")
         print("Écartés par les règles   \(report.excludedByRule)")
         print("Introuvables ou ignorés  \(report.excludedMissingOrIgnored)")
+    }
+}
+
+// MARK: - Restauration typographique
+
+struct Typographie: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Rend aux titres et aux auteurs la graphie que portent les fichiers (accents, apostrophes), sans jamais changer de titre."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Écrit les corrections (sinon : seulement les montrer).")
+    var appliquer = false
+
+    @Option(name: .long, help: "Nombre d'exemples à afficher.")
+    var exemples = 25
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let proposals = try await TypographyPass.proposals(in: database)
+        let titres = proposals.filter { $0.newTitle != nil }.count
+        let auteurs = proposals.filter { $0.newAuthor != nil }.count
+        print("Propositions : \(proposals.count) œuvres — \(titres) titres, \(auteurs) auteurs")
+        print(String(repeating: "─", count: 60))
+        for p in proposals.prefix(exemples) {
+            if let t = p.newTitle { print("titre   \(p.oldTitle)  →  \(t)") }
+            if let a = p.newAuthor { print("auteur  \(p.oldAuthor ?? "")  →  \(a)") }
+        }
+        if appliquer {
+            let n = try await TypographyPass.apply(proposals, to: database)
+            print(String(repeating: "─", count: 60))
+            print("Appliqué à \(n) œuvres.")
+        }
     }
 }
