@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self]
     )
 }
 
@@ -569,6 +569,42 @@ struct Regrouper: AsyncParsableCommand {
             let n = try await EditionGrouping.apply(groups, to: database)
             print(String(repeating: "─", count: 60))
             print("\(n) éditions absorbées.")
+        }
+    }
+}
+
+// MARK: - Autorités
+
+struct Autorites: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Relie les auteurs à leurs notices d'autorité (IdRef, BnF, VIAF, ISNI, Wikidata). Réseau : geste volontaire."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Écrit les liens (sinon : seulement les montrer).")
+    var appliquer = false
+
+    @Option(name: .long, help: "N'examiner que les N premiers auteurs en attente.")
+    var limite: Int?
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let outcomes = try await AuthorityPass.run(in: database, apply: appliquer, limit: limite) { o in
+            switch o.decision {
+            case let .confirmed(c, evidence): print("✓ \(o.name)  →  \(c.label) [\(c.ppn)] — \(evidence)")
+            case let .proposed(cs, evidence): print("? \(o.name)  →  \(cs.map { "\($0.label) [\($0.ppn)]" }.joined(separator: " | ")) — \(evidence)")
+            case .notFound: print("· \(o.name)")
+            }
+        }
+        let confirmed = outcomes.filter { if case .confirmed = $0.decision { true } else { false } }.count
+        let proposed = outcomes.filter { if case .proposed = $0.decision { true } else { false } }.count
+        print(String(repeating: "─", count: 60))
+        print("\(outcomes.count) auteurs examinés : \(confirmed) confirmés, \(proposed) à valider, \(outcomes.count - confirmed - proposed) introuvables.")
+        if appliquer {
+            let shared = try await CatalogStore(db: database).sharedAuthorities(type: .creator, scheme: .idref)
+            if !shared.isEmpty { print("\(shared.count) personnes portent plusieurs fiches d'auteur (à fusionner).") }
         }
     }
 }

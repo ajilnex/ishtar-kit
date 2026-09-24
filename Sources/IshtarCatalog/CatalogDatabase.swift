@@ -243,6 +243,27 @@ public final class CatalogDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v8_authority_links") { db in
+            // Liens vers les référentiels des bibliothèques (IdRef, BnF, VIAF,
+            // ISNI, Wikidata) : pour un auteur, sa notice d'autorité ; pour une
+            // œuvre, son entité Wikidata (qui relie original et traductions).
+            // Table à part, générique : un lien a sa propre vie (proposé,
+            // confirmé, écarté) et la preuve qui le fonde.
+            try db.create(table: "authority_link") { t in
+                t.column("entityType", .text).notNull()     // creator | work
+                t.column("entityId", .text).notNull()
+                t.column("scheme", .text).notNull()         // idref | bnf | viaf | isni | wikidata
+                t.column("identifier", .text).notNull()
+                t.column("label", .text)                    // forme autorisée : « Adorno, Theodor W. (1903-1969) »
+                t.column("status", .text).notNull()         // confirmed | proposed | rejected
+                t.column("evidence", .text)
+                t.column("dateAssigned", .datetime).notNull()
+                t.primaryKey(["entityType", "entityId", "scheme", "identifier"])
+            }
+            try db.create(index: "authority_link_by_identifier", on: "authority_link",
+                          columns: ["scheme", "identifier"])
+        }
+
         // Les migrations suivantes (embeddings, artéfacts) arrivent avec les jalons M3–M4.
 
         return migrator
