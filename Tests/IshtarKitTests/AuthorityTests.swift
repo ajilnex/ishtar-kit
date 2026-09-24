@@ -153,3 +153,45 @@ struct ReidentificationTests {
         #expect(Reidentification.resolve(catalog: "Aristotle", file: "Aristote", embedded: "Aristotle") == R.undecided)
     }
 }
+
+@Suite("Clés et regroupements : règles du 24/09")
+struct KeyAndGroupingRulesTests {
+    @Test("Le mot qui distingue deux livres de même base")
+    func distinguishing() {
+        let fusing = CiteKeyGenerator.titleWords("Wilfrid Sellars: Fusing the Images")
+        let truth = CiteKeyGenerator.titleWords("Wilfrid Sellars on Truth")
+        let bare = CiteKeyGenerator.titleWords("Wilfrid Sellars")
+        #expect(CiteKeyGenerator.distinguishing(fusing, from: [truth, bare]) == "Fusing")
+        #expect(CiteKeyGenerator.distinguishing(truth, from: [fusing, bare]) == "Truth")
+        #expect(CiteKeyGenerator.distinguishing(bare, from: [fusing, truth]) == nil)
+        let t1 = CiteKeyGenerator.titleWords("Anna Karénine - Tome I"), t2 = CiteKeyGenerator.titleWords("Anna Karénine - Tome II")
+        #expect(CiteKeyGenerator.distinguishing(t2, from: [t1]) == "II")
+        let kant = CiteKeyGenerator.titleWords("Critique de la raison pure, tome 1")
+        #expect(CiteKeyGenerator.distinguishing(kant, from: [CiteKeyGenerator.titleWords("Critique de la raison pure")]) == "Tome1")
+    }
+
+    @Test("Deux livres de même base ne se partagent pas un « -b »")
+    func keysDistinguishWorks() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        try await db.pool.write { conn in
+            for title in ["Wilfrid Sellars: Fusing the Images", "Wilfrid Sellars on Truth"] {
+                let work = Work(title: title, curationStatus: .recognized, confidence: .probable)
+                try work.insert(conn)
+                try Edition(workId: work.id, year: "2007", curationStatus: .recognized, confidence: .probable).insert(conn)
+                let c = try Creator.filter(Column("name") == "Rosenberg").fetchOne(conn) ?? { let c = Creator(name: "Rosenberg"); try c.insert(conn); return c }()
+                try WorkCreator(workId: work.id, creatorId: c.id, role: .author, position: 0).insert(conn)
+            }
+            try EditionKey.assignMissing(conn)
+        }
+        let keys = try await db.pool.read { try String.fetchAll($0, sql: "SELECT key FROM edition_key ORDER BY key") }
+        #expect(keys == ["Rosenberg2007WilfridFusing", "Rosenberg2007WilfridTruth"])
+    }
+
+    @Test("Même livre : titre tronqué oui, autre tome non")
+    func sameBook() {
+        #expect(EditionGrouping.sameBook(title: "L ethique protestante", "L’Éthique protestante et l’esprit du capitalisme"))
+        #expect(!EditionGrouping.sameBook(title: "Anna Karénine - Tome I", "Anna Karénine - Tome II"))
+        #expect(!EditionGrouping.sameBook(title: "Logic of the Future", "Logic of the Future Vol 1"))
+        #expect(EditionGrouping.volume("Anna Karénine - Tome II") == "ii")
+    }
+}

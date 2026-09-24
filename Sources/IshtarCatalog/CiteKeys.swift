@@ -113,10 +113,46 @@ public enum CiteKeyGenerator {
     /// La clé de base, sans désambiguïsation.
     public static func base(author: String?, year yearValue: String?, title: String) -> String {
         let family = author.flatMap(family) ?? "Anon"
-        let titleWord = words(title)
-            .first { $0.count > 1 && !stopwords.contains($0.lowercased()) }
-            .map(capitalized) ?? ""
-        return family + (year(yearValue) ?? "ND") + titleWord
+        return family + (year(yearValue) ?? "ND") + (titleWords(title).first ?? "")
+    }
+
+    /// Chiffre romain de tome ou de partie (i à xxxix) : « Tome II ».
+    static func isRoman(_ word: String) -> Bool {
+        word.lowercased().wholeMatch(of: /x{0,3}(ix|iv|v?i{0,3})/) != nil && !word.isEmpty
+    }
+
+    /// Les mots significatifs d'un titre, capitalisés : sans articles ni mots
+    /// d'une lettre, mais avec les numéros (« Anna Karénine, Tome II » →
+    /// Anna, Karenine, Tome, II).
+    static func titleWords(_ title: String) -> [String] {
+        words(title).compactMap { word in
+            if isRoman(word) { return word.uppercased() }
+            if word.allSatisfy(\.isNumber) { return word }
+            guard word.count > 1, !stopwords.contains(word.lowercased()) else { return nil }
+            return capitalized(word)
+        }
+    }
+
+    /// Le mot qui distingue un titre d'autres titres de même clé de base :
+    /// le dernier mot du plus court début de titre que nul autre ne partage.
+    /// « Wilfrid Sellars: Fusing the Images » face à « Wilfrid Sellars on
+    /// Truth » → « Fusing ». nil si le titre est le début d'un autre (il garde
+    /// la clé nue) ou si rien ne le distingue.
+    static func distinguishing(_ mine: [String], from others: [[String]]) -> String? {
+        let lower = mine.map { $0.lowercased() }
+        let otherLists = others.map { $0.map { $0.lowercased() } }
+        guard lower.count > 1 else { return nil }
+        for k in 2...lower.count {
+            let prefix = Array(lower.prefix(k))
+            if !otherLists.contains(where: { Array($0.prefix(k)) == prefix }) {
+                // « Tome » seul ne dit rien : on y joint son numéro (« Tome1 »).
+                if ["tome", "vol", "volume", "band", "livre", "book", "part", "partie"].contains(lower[k - 1]), k < mine.count {
+                    return mine[k - 1] + mine[k]
+                }
+                return mine[k - 1]
+            }
+        }
+        return nil
     }
 
     /// Une clé libre à partir de `base`. `editionYear` départage d'abord ;
@@ -170,7 +206,7 @@ extension EditionKey {
         var taken = Set(try String.fetchAll(db, sql: "SELECT key FROM edition_key"))
 
         let rows = try Row.fetchAll(db, sql: """
-            SELECT e.id AS editionId, e.year AS editionYear, w.date AS workDate, w.title AS title,
+            SELECT e.id AS editionId, e.workId AS workId, e.year AS editionYear, w.date AS workDate, w.title AS title,
                    (SELECT c.name FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
                      WHERE wc.workId = w.id
                      ORDER BY (wc.role = 'author') DESC, wc.position LIMIT 1) AS author
@@ -179,8 +215,20 @@ extension EditionKey {
             WHERE e.id NOT IN (SELECT editionId FROM edition_key)
             """)
 
-        struct Pending { let id: UUID; let base: String; let editionYear: String?; let sort: String }
-        let pending: [Pending] = rows.map { row in
+        // Les titres des œuvres qui portent déjà une clé, par clé de base : un
+        // nouveau livre de même base doit s'en distinguer par son titre.
+        var existing: [String: [(work: UUID, title: String)]] = [:]
+        for row in try Row.fetchAll(db, sql: """
+            SELECT k.key AS key, e.workId AS workId, w.title AS title
+            FROM edition_key k JOIN edition e ON e.id = k.editionId JOIN work w ON w.id = e.workId
+            """) {
+            let key: String = row["key"]
+            let base = String(key.split(separator: "-").first ?? Substring(key)).lowercased()
+            existing[base, default: []].append((row["workId"], row["title"]))
+        }
+
+        struct Pending { let id: UUID; var base: String; let editionYear: String?; var sort: String; let work: UUID; let title: String; let rank: String }
+        var pending: [Pending] = rows.map { row in
             let id: UUID = row["editionId"]
             let workDate: String? = row["workDate"]
             let editionYear: String? = row["editionYear"]
@@ -196,7 +244,27 @@ extension EditionKey {
             // les éditions datées prennent ensuite leur suffixe d'année.
             let rank = distinctEditionYear.map { "1\($0)" } ?? "0"
             return Pending(id: id, base: base, editionYear: distinctEditionYear,
-                           sort: "\(base)\u{1}\(rank)\u{1}\(id.uuidString)")
+                           sort: "\(base)\u{1}\(rank)\u{1}\(id.uuidString)",
+                           work: row["workId"], title: title, rank: rank)
+        }
+
+        // Deux livres différents de même base : chacun prend le mot de titre
+        // qui le distingue (`Rosenberg2007WilfridFusing`,
+        // `Rosenberg2007WilfridTruth`) plutôt qu'un « -b » qui fait croire à un
+        // doublon. Les éditions d'une même œuvre gardent l'année d'édition.
+        let byBase = Dictionary(grouping: pending.indices, by: { pending[$0].base.lowercased() })
+        for (base, indices) in byBase {
+            var titles: [UUID: String] = [:]
+            for i in indices { titles[pending[i].work] = pending[i].title }
+            for owner in existing[base] ?? [] { titles[owner.work] = owner.title }
+            guard titles.count > 1 else { continue }
+            for i in indices {
+                let others = titles.filter { $0.key != pending[i].work }.map { CiteKeyGenerator.titleWords($0.value) }
+                if let word = CiteKeyGenerator.distinguishing(CiteKeyGenerator.titleWords(pending[i].title), from: others) {
+                    pending[i].base += word
+                    pending[i].sort = "\(pending[i].base)\u{1}\(pending[i].rank)\u{1}\(pending[i].id.uuidString)"
+                }
+            }
         }
 
         for item in pending.sorted(by: { $0.sort < $1.sort }) {
@@ -242,6 +310,21 @@ extension CatalogStore {
     @discardableResult
     public func assignMissingKeys() async throws -> Int {
         try await db.pool.write { try EditionKey.assignMissing($0) }
+    }
+
+    /// Recalcule toutes les clés **provisoires** avec les règles du moment
+    /// (les clés figées ou manuelles ne bougent pas). Rend le nombre de clés
+    /// qui ont changé.
+    @discardableResult
+    public func recomputeProvisionalKeys() async throws -> Int {
+        try await db.pool.write { conn in
+            let before = Dictionary(uniqueKeysWithValues: try Row.fetchAll(conn, sql: "SELECT editionId, key FROM edition_key WHERE origin = 'generated'")
+                .map { ($0["editionId"] as UUID, $0["key"] as String) })
+            try conn.execute(sql: "DELETE FROM edition_key WHERE origin = 'generated'")
+            try EditionKey.assignMissing(conn)
+            let after = try Row.fetchAll(conn, sql: "SELECT editionId, key FROM edition_key WHERE origin = 'generated'")
+            return after.filter { before[$0["editionId"] as UUID] != ($0["key"] as String) }.count
+        }
     }
 
     /// La clé d'une édition, si elle en a une.

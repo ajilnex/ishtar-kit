@@ -4,9 +4,13 @@ import GRDB
 /// Regroupement mécanique des éditions : le même livre en plusieurs fichiers
 /// (PDF et EPUB d'une même édition) ne doit porter qu'une fiche et une clé.
 ///
-/// Règle prudente : même premier auteur, même titre, même année — comparés
-/// une fois accents, ponctuation, espaces et casse retirés. Des tomes, des
-/// traductions ou des éditions d'années différentes restent distincts.
+/// Règle prudente : même premier auteur, même année, et le même titre — comparé
+/// une fois accents, ponctuation, espaces et casse retirés — ou un titre qui
+/// prolonge l'autre (« L ethique protestante », tronqué par un nom de fichier,
+/// et « L'Éthique protestante et l'esprit du capitalisme »), sauf si le
+/// prolongement est un tome ou un volume. Des traductions restent distinctes.
+/// Le même livre à deux années différentes n'est pas une seule édition, mais
+/// une seule **œuvre** à deux éditions : voir `workProposals`.
 /// Contrairement à la fusion humaine (`CatalogStore.merge`), la confiance
 /// n'est pas relevée : c'est une proposition mécanique, que « Détacher »
 /// défait.
@@ -23,6 +27,58 @@ public struct EditionGroup: Sendable, Equatable {
 public enum EditionGrouping {
     static func skeleton(_ value: String?) -> String {
         CiteKeyGenerator.words(value ?? "").joined().lowercased()
+    }
+
+    /// Deux titres (squelettes) désignent-ils le même livre ? Égaux, ou l'un
+    /// prolonge l'autre d'au moins dix lettres communes, sans que le
+    /// prolongement soit un numéro de tome ou de volume.
+    static func sameBook(_ a: String, _ b: String) -> Bool {
+        if a == b { return !a.isEmpty }
+        let (short, long) = a.count <= b.count ? (a, b) : (b, a)
+        guard short.count >= 10, long.hasPrefix(short) else { return false }
+        let rest = long.dropFirst(short.count)
+        // « … vol 1 », « … tome 2 », « … t3 », « … 2 » : un autre tome, pas le même livre.
+        if rest.first?.isNumber == true { return false }
+        for marker in ["volume", "vol", "tome", "band", "book", "partie", "part", "livre"] where rest.hasPrefix(marker) {
+            return false
+        }
+        if rest.hasPrefix("t"), rest.dropFirst().first?.isNumber == true { return false }
+        return true
+    }
+
+    /// Titres qui ne disent rien du livre : jamais de regroupement sur eux.
+    static let emptyTitles: Set<String> = ["unknown", "untitled", "sanstitre", "document", "texte", "livre", "book"]
+
+    /// Le numéro de tome ou de volume que porte un titre (« Tome II », « Vol 1 »,
+    /// « t. 3 »), en minuscules ; nil s'il n'en porte pas.
+    static func volume(_ title: String) -> String? {
+        let pattern = /(?i)\b(?:tome|vol\.?|volume|band|bd\.|book|part|partie|livre|t\.)\s*([0-9]+|[ivxlc]+)\b/
+        return title.firstMatch(of: pattern).map { String($0.1).lowercased() }
+    }
+
+    /// Même livre, titres complets en main : `sameBook` sur les squelettes, et
+    /// des numéros de tome qui concordent (Tome I n'est pas Tome II).
+    static func sameBook(title a: String, _ b: String) -> Bool {
+        guard volume(a) == volume(b) else { return false }
+        return sameBook(skeleton(a), skeleton(b))
+    }
+
+    /// Répartit des lignes en paquets de même livre. Chaque paquet ne réunit
+    /// que des titres deux à deux `sameBook` ; un titre court qui convient à
+    /// deux paquets (« Wilfrid Sellars », à côté de « Wilfrid Sellars: Fusing
+    /// the Images » et de « Wilfrid Sellars on Truth ») n'est rattaché à aucun.
+    static func clusters(_ rows: [Row]) -> [[Row]] {
+        var clusters: [[Row]] = []
+        for row in rows.sorted(by: { skeleton($0["title"]).count > skeleton($1["title"]).count }) {
+            let title: String = row["title"]
+            let fitting = clusters.indices.filter { i in clusters[i].allSatisfy { sameBook(title: $0["title"], title) } }
+            if fitting.count == 1 {
+                clusters[fitting[0]].append(row)
+            } else {
+                clusters.append([row])
+            }
+        }
+        return clusters
     }
 
     public static func proposals(in db: CatalogDatabase) async throws -> [EditionGroup] {
@@ -42,19 +98,21 @@ public enum EditionGrouping {
                 let author: String? = row["author"]
                 let year: String? = row["year"]
                 // Sans auteur ni année, trop peu d'indices pour affirmer « même livre ».
-                guard author != nil || year != nil, !skeleton(title).isEmpty else { continue }
+                guard author != nil || year != nil, !skeleton(title).isEmpty,
+                      !emptyTitles.contains(skeleton(title)) else { continue }
                 // Le nom de famille seul : « Achebe » et « Chinua Achebe » sont le même auteur.
                 let family = author.flatMap { CiteKeyGenerator.family($0) }?.lowercased() ?? ""
-                let signature = "\(family)|\(skeleton(title))|\(CiteKeyGenerator.year(year) ?? "")"
+                let signature = "\(family)|\(CiteKeyGenerator.year(year) ?? "")"
                 groups[signature, default: []].append(row)
             }
-            return groups.values.filter { $0.count > 1 }.map { members in
-                // On garde d'abord une fiche corrigée à la main, puis la clé nue
-                // (sans « -2003 » ni « -b ») : c'est elle qu'on citerait.
+            return groups.values.flatMap(clusters).filter { $0.count > 1 }.map { members in
+                // On garde d'abord une fiche corrigée à la main, puis le titre le
+                // plus complet (le nom de fichier tronque), puis la clé nue.
                 let sorted = members.sorted { a, b in
                     let ha = (a["confidence"] as String) == "high" ? 0 : 1, hb = (b["confidence"] as String) == "high" ? 0 : 1
+                    let ta = -skeleton(a["title"]).count, tb = -skeleton(b["title"]).count
                     let ka: String = a["key"] ?? "~", kb: String = b["key"] ?? "~"
-                    return (ha, ka.contains("-") ? 1 : 0, ka) < (hb, kb.contains("-") ? 1 : 0, kb)
+                    return (ha, ta, ka.contains("-") ? 1 : 0, ka) < (hb, tb, kb.contains("-") ? 1 : 0, kb)
                 }
                 let kept = sorted[0]
                 return EditionGroup(keptEditionId: kept["editionId"],
@@ -91,7 +149,86 @@ public enum EditionGrouping {
                 DELETE FROM creator WHERE id NOT IN (SELECT creatorId FROM work_creator)
                     AND id NOT IN (SELECT creatorId FROM edition_creator)
                 """)
+            // La clé provisoire de l'édition gardée perd son « -b » s'il n'a plus lieu d'être.
+            for g in groups {
+                if let kept = try Edition.fetchOne(conn, key: g.keptEditionId) {
+                    try EditionKey.refreshProvisional(forWork: kept.workId, conn)
+                }
+            }
             return absorbed
+        }
+    }
+
+    // MARK: Une œuvre, plusieurs éditions
+
+    /// Le même livre (même auteur, même titre) à des années différentes :
+    /// deux éditions d'une seule œuvre (« Logic of the Future », 2019 et 2021).
+    /// Chaque groupe : l'œuvre gardée d'abord (la plus ancienne), puis les
+    /// œuvres dont les éditions la rejoignent.
+    public static func workProposals(in db: CatalogDatabase) async throws -> [(kept: UUID, absorbed: [UUID], title: String, years: [String])] {
+        try await db.pool.read { conn in
+            let rows = try Row.fetchAll(conn, sql: """
+                SELECT w.id AS workId, w.title AS title, w.confidence AS confidence,
+                       COALESCE(w.date, (SELECT MIN(e.year) FROM edition e WHERE e.workId = w.id)) AS year,
+                       (SELECT c.name FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
+                         WHERE wc.workId = w.id AND wc.role = 'author' ORDER BY wc.position LIMIT 1) AS author
+                FROM work w
+                WHERE EXISTS (SELECT 1 FROM edition e JOIN document d ON d.editionId = e.id
+                              WHERE e.workId = w.id AND d.isMissing = 0)
+                """)
+            var byAuthor: [String: [Row]] = [:]
+            for row in rows {
+                let title: String = row["title"]
+                guard let author: String = row["author"], let family = CiteKeyGenerator.family(author)?.lowercased(),
+                      !emptyTitles.contains(skeleton(title)), !skeleton(title).isEmpty else { continue }
+                byAuthor[family, default: []].append(row)
+            }
+            return byAuthor.values.flatMap(clusters).compactMap { members in
+                let years = Set(members.compactMap { CiteKeyGenerator.year($0["year"]) })
+                guard members.count > 1, years.count > 1 else { return nil }
+                let sorted = members.sorted { a, b in
+                    let ha = (a["confidence"] as String) == "high" ? 0 : 1, hb = (b["confidence"] as String) == "high" ? 0 : 1
+                    return (ha, (a["year"] as String?) ?? "9999") < (hb, (b["year"] as String?) ?? "9999")
+                }
+                return (sorted[0]["workId"], sorted.dropFirst().map { $0["workId"] }, sorted[0]["title"],
+                        sorted.compactMap { $0["year"] as String? })
+            }.sorted { $0.title < $1.title }
+        }
+    }
+
+    /// Les éditions des œuvres absorbées rejoignent l'œuvre gardée, qui prend
+    /// pour année la plus ancienne. Rend le nombre d'œuvres absorbées.
+    @discardableResult
+    public static func applyWorks(_ groups: [(kept: UUID, absorbed: [UUID], title: String, years: [String])],
+                                  to db: CatalogDatabase) async throws -> Int {
+        try await db.pool.write { conn in
+            var n = 0
+            for g in groups {
+                guard var kept = try Work.fetchOne(conn, key: g.kept) else { continue }
+                for id in g.absorbed where id != g.kept {
+                    guard let work = try Work.fetchOne(conn, key: id), work.confidence != .high else { continue }
+                    try conn.execute(sql: "UPDATE edition SET workId = ? WHERE workId = ?", arguments: [kept.id, id])
+                    try conn.execute(sql: """
+                        INSERT OR IGNORE INTO collection_item (collectionId, workId)
+                        SELECT collectionId, ? FROM collection_item WHERE workId = ?
+                        """, arguments: [kept.id, id])
+                    try conn.execute(sql: """
+                        UPDATE OR IGNORE authority_link SET entityId = ? WHERE entityType = 'work' AND entityId = ?
+                        """, arguments: [kept.id, id])
+                    _ = try Work.deleteOne(conn, key: id)
+                    n += 1
+                }
+                if kept.date == nil, let first = g.years.compactMap({ Int($0) }).min() {
+                    kept.date = String(first)
+                    try kept.update(conn)
+                }
+                try EditionKey.refreshProvisional(forWork: kept.id, conn)
+            }
+            try conn.execute(sql: """
+                DELETE FROM creator WHERE id NOT IN (SELECT creatorId FROM work_creator)
+                    AND id NOT IN (SELECT creatorId FROM edition_creator)
+                """)
+            return n
         }
     }
 }

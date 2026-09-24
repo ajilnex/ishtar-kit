@@ -423,8 +423,15 @@ struct Keys: AsyncParsableCommand {
     @Flag(name: .long, help: "Affiche toutes les clés après attribution.")
     var list = false
 
+    @Flag(name: .long, help: "Recalcule les clés provisoires avec les règles du moment (jamais les clés figées ou manuelles).")
+    var recalculer = false
+
     func run() async throws {
         let database = try CatalogDatabase(at: db)
+        if recalculer {
+            let changed = try await CatalogStore(db: database).recomputeProvisionalKeys()
+            print("Clés provisoires recalculées : \(changed) ont changé")
+        }
         let assigned = try await CatalogStore(db: database).assignMissingKeys()
         print("Clés attribuées : \(assigned)")
         if list {
@@ -565,10 +572,17 @@ struct Regrouper: AsyncParsableCommand {
         for g in groups.prefix(exemples) {
             print("\(g.keptKey ?? "?")  ×\(g.absorbedEditionIds.count + 1)  \(g.author ?? "") — \(g.title) (\(g.year ?? "s.d."))")
         }
+        let works = try await EditionGrouping.workProposals(in: database)
+        print(String(repeating: "─", count: 60))
+        print("Œuvres à plusieurs éditions : \(works.count)")
+        for w in works.prefix(exemples) {
+            print("\(w.title)  ×\(w.absorbed.count + 1)  (\(w.years.joined(separator: ", ")))")
+        }
         if appliquer {
             let n = try await EditionGrouping.apply(groups, to: database)
+            let m = try await EditionGrouping.applyWorks(works, to: database)
             print(String(repeating: "─", count: 60))
-            print("\(n) éditions absorbées.")
+            print("\(n) éditions absorbées, \(m) œuvres réunies.")
         }
     }
 }
