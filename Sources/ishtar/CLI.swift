@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self]
     )
 }
 
@@ -526,6 +526,39 @@ struct Typographie: AsyncParsableCommand {
             let n = try await TypographyPass.apply(proposals, to: database)
             print(String(repeating: "─", count: 60))
             print("Appliqué à \(n) œuvres.")
+        }
+    }
+}
+
+// MARK: - Regroupement des éditions
+
+struct Regrouper: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Réunit sous une seule fiche et une seule clé le même livre en plusieurs fichiers (même auteur, titre, année)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Écrit les regroupements (sinon : seulement les montrer).")
+    var appliquer = false
+
+    @Option(name: .long, help: "Nombre d'exemples à afficher.")
+    var exemples = 30
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let groups = try await EditionGrouping.proposals(in: database)
+        let absorbed = groups.reduce(0) { $0 + $1.absorbedEditionIds.count }
+        print("Groupes : \(groups.count) — \(absorbed) éditions à absorber")
+        print(String(repeating: "─", count: 60))
+        for g in groups.prefix(exemples) {
+            print("\(g.keptKey ?? "?")  ×\(g.absorbedEditionIds.count + 1)  \(g.author ?? "") — \(g.title) (\(g.year ?? "s.d."))")
+        }
+        if appliquer {
+            let n = try await EditionGrouping.apply(groups, to: database)
+            print(String(repeating: "─", count: 60))
+            print("\(n) éditions absorbées.")
         }
     }
 }
