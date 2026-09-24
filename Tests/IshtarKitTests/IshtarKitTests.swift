@@ -312,7 +312,7 @@ struct IngestTests {
         #expect(collections.map(\.name) == ["Philosophie allemande"])
     }
 
-    @Test("Ré-ingérer est idempotent ; les fichiers disparus sortent avec leurs orphelins")
+    @Test("Ré-ingérer est idempotent ; les fichiers disparus restent au catalogue sous statut isMissing")
     func reingestAndRemoval() async throws {
         let root = try makeFixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -332,18 +332,24 @@ struct IngestTests {
         let countAfterSecond = try await db.pool.read { try Work.fetchCount($0) }
         #expect(countAfterSecond == 3)
 
-        // Un fichier disparaît : son document, son édition et son œuvre aussi.
+        // Un fichier disparaît : son document reste au catalogue (isMissing = true), son édition et son œuvre aussi.
         try FileManager.default.removeItem(at: root.appendingPathComponent("Kant_1781_Critique.pdf"))
         let third = try ingestor.ingest(report: scanner.scan(directory: root), sourceFolder: root, into: db)
-        #expect(third.removed == 1)
+        #expect(third.removed == 0)
+        #expect(third.missing == 1)
         #expect(third.kept == 2)
 
         let works = try await db.pool.read { try Work.fetchCount($0) }
         let editions = try await db.pool.read { try Edition.fetchCount($0) }
         let documents = try await db.pool.read { try Document.fetchCount($0) }
-        #expect(works == 2)
-        #expect(editions == 2)
-        #expect(documents == 2)
+        #expect(works == 3)
+        #expect(editions == 3)
+        #expect(documents == 3)
+
+        let missingDoc = try await db.pool.read {
+            try Document.fetchAll($0).first(where: { $0.originalFileName == "Kant_1781_Critique.pdf" })
+        }
+        #expect(missingDoc?.isMissing == true)
     }
 
     @Test("LibraryOverview assemble lignes, statistiques et appartenances")

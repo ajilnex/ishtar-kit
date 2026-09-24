@@ -36,7 +36,7 @@ public final class CatalogDatabase: Sendable {
         return Self.knownMigrationIdentifiers.filter(applied.contains)
     }
 
-    static var migrator: DatabaseMigrator {
+    public static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
         migrator.registerMigration("v1_ontologie") { db in
@@ -218,6 +218,14 @@ public final class CatalogDatabase: Sendable {
                 t.column("note", .text)
                 t.column("dateCreated", .datetime).notNull()
                 t.column("dateModified", .datetime).notNull()
+            }
+        }
+ 
+        migrator.registerMigration("v6_document_missing_state") { db in
+            // Un document introuvable reste au catalogue avec son travail intellectuel (décision utilisateur I01).
+            // La colonne isMissing trace l'indisponibilité physique sans suppression ni cascade.
+            try db.alter(table: "document") { t in
+                t.add(column: "isMissing", .boolean).notNull().defaults(to: false)
             }
         }
 

@@ -122,3 +122,12 @@ Additive, après v4.
   - `note`, `dateCreated`, `dateModified`.
 
 **Note sur l'intégrité** : La colonne `projectId` existait déjà dans `annotation` (créée en v3). Nous n'avons PAS reconstruit la table `annotation` pour lui ajouter une contrainte de clé étrangère vers `project(id)`. SQLite ne sait pas ajouter une contrainte à une colonne existante sans reconstruire la table (ce qui n'est pas une migration purement additive). La colonne reste un `TEXT` simple. L'intégrité référentielle est garantie par le `ProjectStore` : supprimer un projet déclenche manuellement une mise à nul des `projectId` portés par les annotations et les encres, pour qu'elles retombent dans la couche globale sans jamais être perdues.
+
+## Migration v6 — Persistance des documents introuvables (Lot I01)
+
+Additive, après v5.
+
+- **document.isMissing** — `BOOLEAN NOT NULL DEFAULT 0`.
+  - Décision utilisateur : un document introuvable reste au catalogue avec son travail intellectuel (fiches, surlignements, liens et projets conservés).
+  - Aucune suppression automatique lors d'une absence physique ou d'un scan incomplet.
+  - La colonne `isMissing` passe à `true` lorsque le fichier n'est plus vu lors d'un scan complet fiable, et repasse à `false` dès sa réapparition ou son déplacement non ambigu.

@@ -113,6 +113,10 @@ struct Scan: AsyncParsableCommand {
                 print("")
             }
         }
+
+        if !report.isComplete || report.hasScanErrors {
+            print("\n⚠️ SCAN INCOMPLET : \(report.errorMessage ?? "Erreur d'accès pendant le parcours")")
+        }
     }
 }
 
@@ -134,10 +138,17 @@ struct Ingest: AsyncParsableCommand {
 
         print("Catalogue : \(db.path)")
         print(String(repeating: "─", count: 60))
+        if report.isScanIncomplete {
+            print("⚠️ SCAN INCOMPLET : \(report.scanErrorMessage ?? "Erreur lors du scan")")
+            print("Aucune modification apportée au catalogue.")
+            return
+        }
         print("Documents scannés   \(report.scanned)")
         print("  ajoutés           \(report.added)")
         print("  conservés         \(report.kept)")
-        print("  retirés           \(report.removed)")
+        print("  introuvables      \(report.missing)")
+        print("  retrouvés         \(report.recovered)")
+        print("  déplacés          \(report.relocated)")
         print("  reconnus          \(report.recognized)")
         print("  à identifier      \(report.needsReview)")
         print("  doublons          \(report.duplicates)")

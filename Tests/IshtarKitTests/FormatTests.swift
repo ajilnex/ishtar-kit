@@ -289,7 +289,7 @@ struct MOBITests {
         // « espace + lettre » : l'octet 0xE1 vaut « espace » puis 0x61 ('a').
         #expect(MOBIDocument.decompressPalmDOC(Data([0xE1])) == Data(" a".utf8))
         // Paire longueur/distance : « abcd » puis 3 octets recopiés à 4 en arrière.
-        let source = Data([0x61, 0x62, 0x63, 0x64, 0x80 | 0x00, (4 << 3) | 0x00])
+        let source = Data([UInt8(0x61), UInt8(0x62), UInt8(0x63), UInt8(0x64), UInt8(0x80), UInt8(4 << 3)])
         #expect(MOBIDocument.decompressPalmDOC(source) == Data("abcdabc".utf8))
     }
 

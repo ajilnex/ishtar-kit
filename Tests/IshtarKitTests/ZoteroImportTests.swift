@@ -1,9 +1,11 @@
-import XCTest
+import Foundation
+import Testing
 import GRDB
 @testable import IshtarCatalog
 @testable import IshtarIngest
 
-final class ZoteroImportTests: XCTestCase {
+@Suite("Import Zotero")
+struct ZoteroImportTests {
     
     private func createDummyZoteroDatabase(at url: URL) throws {
         let dbQueue = try DatabaseQueue(path: url.path)
@@ -34,7 +36,8 @@ final class ZoteroImportTests: XCTestCase {
         }
     }
     
-    func testZoteroImport() async throws {
+    @Test("Import d'une base Zotero avec arborescence et correspondances")
+    func zoteroImport() async throws {
         let catalogURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("sqlite")
         defer { try? FileManager.default.removeItem(at: catalogURL) }
         
@@ -67,41 +70,41 @@ final class ZoteroImportTests: XCTestCase {
         
         // Dry run
         let reportDry = try await importer.importDatabase(at: zoteroDBURL, into: catalogDB, apply: false)
-        XCTAssertEqual(reportDry.attachmentsFound, 3)
-        XCTAssertEqual(reportDry.matchedAttachments, 2)
-        XCTAssertEqual(reportDry.collectionsCreated, 2) // Parent and Child
-        XCTAssertEqual(reportDry.itemsWithoutFile, 1) // missing.pdf
-        XCTAssertEqual(reportDry.unclassifiableDocuments, 1) // doc-no-edition.pdf
+        #expect(reportDry.attachmentsFound == 3)
+        #expect(reportDry.matchedAttachments == 2)
+        #expect(reportDry.collectionsCreated == 2) // Parent and Child
+        #expect(reportDry.itemsWithoutFile == 1) // missing.pdf
+        #expect(reportDry.unclassifiableDocuments == 1) // doc-no-edition.pdf
         
         try await catalogDB.pool.read { db in
             let collections = try BookCollection.fetchAll(db)
-            XCTAssertEqual(collections.count, 1) // Only the one with sourceFolderPath
+            #expect(collections.count == 1) // Only the one with sourceFolderPath
         }
         
         // Apply run
         let reportApply = try await importer.importDatabase(at: zoteroDir, into: catalogDB, apply: true) // directory test
-        XCTAssertEqual(reportApply.collectionsCreated, 2)
+        #expect(reportApply.collectionsCreated == 2)
         
         try await catalogDB.pool.read { db in
             let collections = try BookCollection.fetchAll(db)
-            XCTAssertEqual(collections.count, 3) // 1 existing + 2 Zotero
+            #expect(collections.count == 3) // 1 existing + 2 Zotero
             
             let parent = collections.first { $0.name == "Parent Collection" }
             let child = collections.first { $0.name == "Child Collection" }
-            XCTAssertNotNil(parent)
-            XCTAssertNotNil(child)
-            XCTAssertEqual(child?.parentId, parent?.id)
+            #expect(parent != nil)
+            #expect(child != nil)
+            #expect(child?.parentId == parent?.id)
             
             let empty = collections.first { $0.name == "Empty Collection" }
-            XCTAssertNil(empty) // should not be created
+            #expect(empty == nil) // should not be created
             
             let colItems = try CollectionItem.fetchAll(db)
-            XCTAssertEqual(colItems.count, 1)
-            XCTAssertEqual(colItems.first?.collectionId, child?.id)
+            #expect(colItems.count == 1)
+            #expect(colItems.first?.collectionId == child?.id)
         }
         
         // Idempotence test
         let reportSecond = try await importer.importDatabase(at: zoteroDBURL, into: catalogDB, apply: true)
-        XCTAssertEqual(reportSecond.collectionsCreated, 0)
+        #expect(reportSecond.collectionsCreated == 0)
     }
 }

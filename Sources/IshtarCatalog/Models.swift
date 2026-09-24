@@ -229,8 +229,16 @@ public struct Document: Identifiable, Codable, Hashable, Sendable, FetchableReco
     public var dateAdded: Date
     public var needsOCR: Bool
     public var isTextExtracted: Bool
+    /// Vrai si le fichier physique est introuvable sur le disque lors du scan.
+    public var isMissing: Bool
     public var curationStatus: CurationStatus
     public var confidence: Confidence
+
+    enum CodingKeys: String, CodingKey {
+        case id, editionId, filePath, originalFileName, fileSize, contentHash
+        case format, dateAdded, needsOCR, isTextExtracted, isMissing
+        case curationStatus, confidence
+    }
 
     public init(
         id: UUID = UUID(),
@@ -243,6 +251,7 @@ public struct Document: Identifiable, Codable, Hashable, Sendable, FetchableReco
         dateAdded: Date = Date(),
         needsOCR: Bool = false,
         isTextExtracted: Bool = false,
+        isMissing: Bool = false,
         curationStatus: CurationStatus = .needsReview,
         confidence: Confidence = .low
     ) {
@@ -256,8 +265,26 @@ public struct Document: Identifiable, Codable, Hashable, Sendable, FetchableReco
         self.dateAdded = dateAdded
         self.needsOCR = needsOCR
         self.isTextExtracted = isTextExtracted
+        self.isMissing = isMissing
         self.curationStatus = curationStatus
         self.confidence = confidence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        editionId = try container.decodeIfPresent(UUID.self, forKey: .editionId)
+        filePath = try container.decode(String.self, forKey: .filePath)
+        originalFileName = try container.decode(String.self, forKey: .originalFileName)
+        fileSize = try container.decode(Int64.self, forKey: .fileSize)
+        contentHash = try container.decodeIfPresent(String.self, forKey: .contentHash)
+        format = try container.decode(DocumentFormat.self, forKey: .format)
+        dateAdded = try container.decode(Date.self, forKey: .dateAdded)
+        needsOCR = try container.decodeIfPresent(Bool.self, forKey: .needsOCR) ?? false
+        isTextExtracted = try container.decodeIfPresent(Bool.self, forKey: .isTextExtracted) ?? false
+        isMissing = try container.decodeIfPresent(Bool.self, forKey: .isMissing) ?? false
+        curationStatus = try container.decode(CurationStatus.self, forKey: .curationStatus)
+        confidence = try container.decode(Confidence.self, forKey: .confidence)
     }
 }
 
