@@ -221,7 +221,11 @@ public enum EditionGrouping {
                       !emptyTitles.contains(skeleton(title)), !skeleton(title).isEmpty else { continue }
                 byAuthor[family, default: []].append(row)
             }
-            return byAuthor.values.flatMap(clusters).compactMap { members in
+            // Entre œuvres, titres identiques seulement : un titre qui en prolonge
+            // un autre peut être un autre texte (« Aristotle's Ethics » de Barnes
+            // n'est pas son compte rendu « Aristotle's Ethics and St Paul »).
+            let exact = byAuthor.values.flatMap { rows in Dictionary(grouping: rows, by: { skeleton($0["title"]) }).values.map(Array.init) }
+            return exact.compactMap { members in
                 // Deux œuvres du même auteur et du même titre sont une seule
                 // œuvre, que leurs années diffèrent (éditions successives) ou
                 // non (formats ingérés séparément : Aristophane en EPUB et MOBI).

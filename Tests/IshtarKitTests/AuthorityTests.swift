@@ -263,3 +263,14 @@ struct NameCleanupTests {
         #expect(TypographyRestorer.normalizedAuthor("1040-1105 Rashi") == "Rashi")
     }
 }
+
+@Suite("Titres : graphie du Sudoc")
+struct TitlePassTests {
+    @Test func restoration() {
+        #expect(TitlePass.restoration(current: "De l ame", sudoc: "De l'âme", french: true) == "De l'âme")
+        #expect(TitlePass.restoration(current: "Traite du ciel", sudoc: "\u{98}Traité du ciel\u{9C}", french: true) == "Traité du ciel")
+        #expect(TitlePass.restoration(current: "Aristotles Ethics", sudoc: "Aristotle's ethics", french: false) == "Aristotle's Ethics")
+        #expect(TitlePass.restoration(current: "Truth and Truthmakers", sudoc: "Truth and truthmakers", french: false) == nil)
+        #expect(TitlePass.restoration(current: "La Physique", sudoc: "Physique", french: true) == nil)
+    }
+}

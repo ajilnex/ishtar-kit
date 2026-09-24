@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self]
     )
 }
 
@@ -789,12 +789,18 @@ struct Ranger: AsyncParsableCommand {
         plan = plan.filter { r in
             let target = (r.to as NSString).lastPathComponent
             if target.contains("TRIER") { held.append((r, "à trier")); return false }
+            if let t = FilenameParser.parse(fileName: target).title as String?,
+               ["unknown", "untitled", "inconnu", "sanstitre"].contains(t.lowercased().filter(\.isLetter)) {
+                held.append((r, "titre inconnu")); return false
+            }
             if r.verified { return true }
             let old = FilenameParser.parse(fileName: (r.from as NSString).lastPathComponent)
             let new = FilenameParser.parse(fileName: target)
             if old.confidence == .structured, let a = old.author, let b = new.author, !Reidentification.isPlaceholder(a),
                Reidentification.family(a) != Reidentification.family(b.components(separatedBy: " & ").first ?? b)
-                && !Reidentification.sameAuthor(a, b) {
+                && !Reidentification.sameAuthor(a, b)
+                // Co-auteurs joints : « Badiou-Roudinesco » devient « Badiou & Roudinesco ».
+                && Reidentification.family(a.components(separatedBy: "-").first) != Reidentification.family(b.components(separatedBy: " & ").first ?? b) {
                 held.append((r, "le nom de fichier dit « \(a) »")); return false
             }
             return true
@@ -980,5 +986,27 @@ struct Auteurs: AsyncParsableCommand {
             }
             else { try await store.splitCreator(named: e.de, into: e.vers) }
         }
+    }
+}
+
+// MARK: - Titres (graphie du Sudoc)
+
+struct Titres: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Rend aux titres privés d'accents et d'apostrophes la graphie du Sudoc (même titre seulement). Réseau."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Écrit (sinon : seulement montrer).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let list = try await TitlePass.proposals(in: database)
+        print("Titres rendus à leur graphie : \(list.count)")
+        for r in list { print("\(r.current)  →  \(r.restored)") }
+        if appliquer { print("Appliqué à \(try await TitlePass.apply(list, to: database)) œuvres.") }
     }
 }
