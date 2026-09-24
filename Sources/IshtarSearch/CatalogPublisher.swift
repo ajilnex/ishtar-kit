@@ -182,9 +182,15 @@ public struct CatalogPublisher: Sendable {
     /// Chaque fichier est écrit à côté puis mis en place par renommage, et le
     /// manifeste `catalogue.json` en dernier : un lecteur ne voit jamais un
     /// catalogue qui annonce des couvertures ou une base pas encore là.
+    ///
+    /// `renderCover` fabrique la couverture qui manque au cache (chemin absolu
+    /// du fichier → PNG). `includeDatabase` : la base réduite porte les textes
+    /// intégraux, lourde à transporter ; seulement quand un outil en a besoin.
     @discardableResult
     public func publish(root: String, rules: PublicationRules, to outputFolder: URL,
-                        coversFolder: URL? = nil, now: Date = Date()) async throws -> PublicationReport {
+                        coversFolder: URL? = nil, includeDatabase: Bool = false,
+                        renderCover: (@Sendable (URL) async -> Data?)? = nil,
+                        now: Date = Date()) async throws -> PublicationReport {
         let fm = FileManager.default
         try fm.createDirectory(at: outputFolder, withIntermediateDirectories: true)
         let (catalogue, built) = try await build(root: root, rules: rules, now: now)
@@ -192,33 +198,44 @@ public struct CatalogPublisher: Sendable {
 
         // 1. Base réduite, pour la recherche plein texte côté serveur.
         let sqliteTarget = outputFolder.appendingPathComponent("catalog.sqlite")
-        let sqliteTemp = outputFolder.appendingPathComponent(".catalog.sqlite.tmp")
-        try? fm.removeItem(at: sqliteTemp)
-        try await db.pool.writeWithoutTransaction { conn in
-            try conn.execute(sql: "VACUUM INTO ?", arguments: [sqliteTemp.path])
-        }
-        try Self.reduce(snapshotAt: sqliteTemp, keeping: Set(catalogue.editions.flatMap { $0.files.map(\.sha256) }))
-        if fm.fileExists(atPath: sqliteTarget.path) {
-            _ = try fm.replaceItemAt(sqliteTarget, withItemAt: sqliteTemp)
+        if includeDatabase {
+            let sqliteTemp = outputFolder.appendingPathComponent(".catalog.sqlite.tmp")
+            try? fm.removeItem(at: sqliteTemp)
+            try await db.pool.writeWithoutTransaction { conn in
+                try conn.execute(sql: "VACUUM INTO ?", arguments: [sqliteTemp.path])
+            }
+            try Self.reduce(snapshotAt: sqliteTemp,
+                            keeping: Set(catalogue.editions.flatMap { $0.files.map(\.sha256) }))
+            if fm.fileExists(atPath: sqliteTarget.path) {
+                _ = try fm.replaceItemAt(sqliteTarget, withItemAt: sqliteTemp)
+            } else {
+                try fm.moveItem(at: sqliteTemp, to: sqliteTarget)
+            }
         } else {
-            try fm.moveItem(at: sqliteTemp, to: sqliteTarget)
+            try? fm.removeItem(at: sqliteTarget)
         }
 
         // 2. Couvertures : ajout des manquantes, retrait des orphelines.
         let coversOut = outputFolder.appendingPathComponent("covers", isDirectory: true)
         try fm.createDirectory(at: coversOut, withIntermediateDirectories: true)
         var wanted: Set<String> = []
-        if let coversFolder {
-            for edition in catalogue.editions {
-                for file in edition.files {
-                    let name = "\(file.sha256).png"
-                    let source = coversFolder.appendingPathComponent(name)
-                    guard fm.fileExists(atPath: source.path) else { continue }
+        let rootURL = URL(fileURLWithPath: root)
+        for edition in catalogue.editions {
+            for file in edition.files {
+                let name = "\(file.sha256).png"
+                let target = coversOut.appendingPathComponent(name)
+                if fm.fileExists(atPath: target.path) {
                     wanted.insert(name)
-                    let target = coversOut.appendingPathComponent(name)
-                    if !fm.fileExists(atPath: target.path) {
-                        try fm.copyItem(at: source, to: target)
-                    }
+                    continue
+                }
+                if let source = coversFolder?.appendingPathComponent(name),
+                   fm.fileExists(atPath: source.path) {
+                    try fm.copyItem(at: source, to: target)
+                    wanted.insert(name)
+                } else if let renderCover,
+                          let data = await renderCover(rootURL.appendingPathComponent(file.path)) {
+                    try data.write(to: target, options: .atomic)
+                    wanted.insert(name)
                 }
             }
         }

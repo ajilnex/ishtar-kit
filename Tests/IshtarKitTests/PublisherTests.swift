@@ -76,7 +76,7 @@ struct PublisherTests {
         try await add(db, title: "Journal intime", path: "\(root)/_NON_BIBLIO/journal.pdf", hash: "bbb")
 
         let report = try await CatalogPublisher(db: db)
-            .publish(root: root, rules: rules, to: out, coversFolder: covers)
+            .publish(root: root, rules: rules, to: out, coversFolder: covers, includeDatabase: true)
         #expect(report.editions == 1)
         #expect(report.covers == 1)
 
@@ -95,7 +95,7 @@ struct PublisherTests {
 
         // Republier est idempotent et remplace proprement.
         let again = try await CatalogPublisher(db: db)
-            .publish(root: root, rules: rules, to: out, coversFolder: covers)
+            .publish(root: root, rules: rules, to: out, coversFolder: covers, includeDatabase: true)
         #expect(again == report)
     }
 }

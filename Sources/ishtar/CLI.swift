@@ -460,6 +460,12 @@ struct Publish: AsyncParsableCommand {
     @Option(name: .long, help: "Préfixe de titre à ne pas publier. Répétable.")
     var excludeTitlePrefix: [String] = []
 
+    @Flag(name: .long, help: "Fabrique les couvertures absentes du dossier de vignettes (QuickLook, 1re page).")
+    var renderCovers = false
+
+    @Flag(name: .long, help: "Joint la base réduite (textes intégraux, volumineuse).")
+    var withDatabase = false
+
     @Flag(name: .long, help: "Construit et résume sans rien écrire.")
     var dryRun = false
 
@@ -474,7 +480,10 @@ struct Publish: AsyncParsableCommand {
         if dryRun {
             report = try await publisher.build(root: root, rules: rules).1
         } else {
-            report = try await publisher.publish(root: root, rules: rules, to: out, coversFolder: covers)
+            let render: (@Sendable (URL) async -> Data?)? = renderCovers
+                ? { @Sendable url in await CoverRenderer.png(for: url, strictness: 0.5) } : nil
+            report = try await publisher.publish(root: root, rules: rules, to: out, coversFolder: covers,
+                                                 includeDatabase: withDatabase, renderCover: render)
         }
         print(dryRun ? "Publication (essai à blanc)" : "Publié dans \(out.path)")
         print(String(repeating: "─", count: 60))
