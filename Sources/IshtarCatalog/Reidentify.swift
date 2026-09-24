@@ -108,4 +108,31 @@ extension CatalogStore {
             try conn.execute(sql: "UPDATE creator SET sortName = ? WHERE id = ?", arguments: [sortName, id])
         }
     }
+
+    /// Date de l'œuvre et note de provenance d'une correction (« Corrigé
+    /// sur la page de titre… »), sans toucher à la confiance.
+    public func annotateWork(_ workId: UUID, date: String?, note: String?) async throws {
+        try await db.pool.write { conn in
+            if let date { try conn.execute(sql: "UPDATE work SET date = ? WHERE id = ?", arguments: [date, workId]) }
+            if let note {
+                try conn.execute(sql: """
+                    UPDATE work SET notes = CASE WHEN notes IS NULL OR notes = '' THEN ? ELSE notes || char(10) || ? END WHERE id = ?
+                    """, arguments: [note, note, workId])
+            }
+            try EditionKey.refreshProvisional(forWork: workId, conn)
+        }
+    }
+
+    /// Le document dont le fichier porte ce nom (dans n'importe quel dossier),
+    /// s'il est unique : (document, édition, œuvre).
+    public func document(named fileName: String) async throws -> (documentId: UUID, editionId: UUID?, workId: UUID)? {
+        try await db.pool.read { conn in
+            let rows = try Row.fetchAll(conn, sql: """
+                SELECT d.id AS d, d.editionId AS e, ed.workId AS w FROM document d LEFT JOIN edition ed ON ed.id = d.editionId
+                WHERE d.filePath LIKE ? ESCAPE '\\' AND d.isMissing = 0
+                """, arguments: ["%/" + fileName.replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")])
+            guard rows.count == 1, let w: UUID = rows[0]["w"] else { return nil }
+            return (rows[0]["d"], rows[0]["e"], w)
+        }
+    }
 }

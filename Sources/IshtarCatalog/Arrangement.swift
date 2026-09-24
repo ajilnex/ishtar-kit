@@ -70,11 +70,15 @@ public struct Renaming: Sendable, Equatable {
     public let documentId: UUID
     public let from: String
     public let to: String
+    /// La fiche a été vérifiée (confiance haute) : son nom l'emporte sur
+    /// l'ancien nom de fichier.
+    public let verified: Bool
 
-    public init(documentId: UUID, from: String, to: String) {
+    public init(documentId: UUID, from: String, to: String, verified: Bool = false) {
         self.documentId = documentId
         self.from = from
         self.to = to
+        self.verified = verified
     }
 }
 
@@ -128,7 +132,8 @@ extension CatalogStore {
                 }
                 taken[dir, default: []].remove(current.lowercased())
                 taken[dir, default: []].insert(target.lowercased())
-                plan.append(Renaming(documentId: row["id"], from: path, to: (dir as NSString).appendingPathComponent(target)))
+                plan.append(Renaming(documentId: row["id"], from: path, to: (dir as NSString).appendingPathComponent(target),
+                                     verified: (row["confidence"] as String) == "high"))
             }
             return plan
         }

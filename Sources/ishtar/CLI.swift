@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self]
     )
 }
 
@@ -789,6 +789,7 @@ struct Ranger: AsyncParsableCommand {
         plan = plan.filter { r in
             let target = (r.to as NSString).lastPathComponent
             if target.contains("TRIER") { held.append((r, "à trier")); return false }
+            if r.verified { return true }
             let old = FilenameParser.parse(fileName: (r.from as NSString).lastPathComponent)
             let new = FilenameParser.parse(fileName: target)
             if old.confidence == .structured, let a = old.author, let b = new.author,
@@ -821,5 +822,97 @@ struct Ranger: AsyncParsableCommand {
         }
         try handle.close()
         print("\(done) fichiers renommés. Journal : \(journal)")
+    }
+}
+
+// MARK: - Vérifier par le contenu
+
+struct Verifier: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Confronte chaque fiche aux premières pages du livre : fiches étrangères, tomes, jumeaux."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Affiche l'ouverture de chaque livre suspect.")
+    var ouvertures = false
+
+    @Option(name: .long, help: "Dossier dont les jumeaux sont voulus (répétable) : espaces de travail, traductions en cours…")
+    var exclure: [String] = []
+
+    @Flag(name: .long, help: "Réunit les jumeaux sous la fiche que le texte confirme le mieux.")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        var (findings, twins) = try await ContentCheck.examine(in: database)
+        twins = twins.filter { t in !t.paths.contains { p in exclure.contains { p.contains("/\($0)/") } } }
+        print("Fiches que le livre dément : \(findings.count) — jumeaux : \(twins.count)")
+        print(String(repeating: "─", count: 60))
+        for f in findings.sorted(by: { $0.fileName < $1.fileName }) {
+            print("[\(f.kind == .volumeMismatch ? "tome" : "étrangère")] \(f.fileName) — \(f.author ?? "∅") — \(f.title) (\(f.pageCount) p.)")
+            if ouvertures { print("   « \(f.opening) »") }
+        }
+        print(String(repeating: "─", count: 60))
+        for t in twins { print("jumeaux : " + t.titles.joined(separator: "  =  ") + "   → garder « \(t.titles[t.best]) »") }
+        if appliquer {
+            let n = try await ContentCheck.merge(twins, in: database)
+            print("\(n) éditions réunies à leur jumelle.")
+        }
+    }
+}
+
+// MARK: - Corrections vérifiées sur pièce
+
+struct Corriger: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Applique des corrections vérifiées sur la page de titre (JSON) : la fiche passe en confiance haute, avec sa note de provenance."
+    )
+
+    struct Correction: Decodable {
+        let fichier: String
+        let titre: String
+        let auteurs: [String]
+        let annee: String?
+        let edition: String?
+        let editeur: String?
+        let isbn: String?
+        let langue: String?
+        let preuve: String?
+    }
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Fichier JSON des corrections.")
+    var fichier: String
+
+    @Option(name: .long, help: "Qui corrige (pour la note de provenance).")
+    var par: String = "Claude, à la demande d'Aubin"
+
+    @Flag(name: .long, help: "Écrit les corrections (sinon : seulement vérifier qu'on trouve chaque fichier).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let store = CatalogStore(db: database)
+        let corrections = try JSONDecoder().decode([Correction].self, from: Data(contentsOf: URL(fileURLWithPath: fichier)))
+        let day = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
+        var done = 0
+        for c in corrections {
+            guard let target = try await store.document(named: c.fichier) else {
+                print("introuvable ou ambigu : \(c.fichier)"); continue
+            }
+            print("\(c.fichier)\n   → \(c.auteurs.joined(separator: " ; ")) — \(c.titre) (\(c.annee ?? "s.d."))")
+            guard appliquer else { continue }
+            try await store.applyUserEdit(workId: target.workId, editionId: target.editionId, documentId: target.documentId,
+                                          edit: RecordEdit(title: c.titre, authors: c.auteurs, year: c.edition ?? c.annee,
+                                                           publisher: c.editeur, language: c.langue, isbn13: c.isbn))
+            let note = "Vérifié sur pièce le \(day) (\(par))" + (c.preuve.map { " : \($0)" } ?? ".")
+            try await store.annotateWork(target.workId, date: c.annee, note: note)
+            done += 1
+        }
+        if appliquer { print("\(done) fiches corrigées.") }
     }
 }

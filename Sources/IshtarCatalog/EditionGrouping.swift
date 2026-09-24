@@ -56,6 +56,29 @@ public enum EditionGrouping {
         return title.firstMatch(of: pattern).map { String($0.1).lowercased() }
     }
 
+    /// Le numéro de tome en nombre (« II » → 2, « 3 » → 3), nil sans numéro.
+    public static func volumeNumber(_ text: String, markers: [String]? = nil) -> Int? {
+        let v: String?
+        if let markers {
+            let words = markers.joined(separator: "|")
+            let regex = try? NSRegularExpression(pattern: "(?i)\\b(?:\(words))\\.?\\s*([0-9]+|[ivxlc]+)\\b")
+            let range = NSRange(text.startIndex..., in: text)
+            v = regex?.firstMatch(in: text, range: range).flatMap { Range($0.range(at: 1), in: text) }.map { String(text[$0]).lowercased() }
+        } else {
+            v = volume(text)
+        }
+        guard let v else { return nil }
+        if let n = Int(v) { return n }
+        let values: [Character: Int] = ["i": 1, "v": 5, "x": 10, "l": 50, "c": 100]
+        var total = 0, previous = 0
+        for c in v.reversed() {
+            guard let value = values[c] else { return nil }
+            total += value < previous ? -value : value
+            previous = max(previous, value)
+        }
+        return total
+    }
+
     /// Même livre, titres complets en main : `sameBook` sur les squelettes, et
     /// des numéros de tome qui concordent (Tome I n'est pas Tome II).
     static func sameBook(title a: String, _ b: String) -> Bool {
@@ -157,6 +180,16 @@ public enum EditionGrouping {
             }
             return absorbed
         }
+    }
+
+    /// Rattache des éditions à une autre : leurs fichiers la rejoignent (le
+    /// même livre, prouvé par ailleurs). Rend le nombre d'éditions absorbées.
+    @discardableResult
+    public static func absorb(_ editions: [UUID], into kept: UUID, in db: CatalogDatabase) async throws -> Int {
+        guard let edition = try await db.pool.read({ try Edition.fetchOne($0, key: kept) }) else { return 0 }
+        let group = EditionGroup(keptEditionId: kept, absorbedEditionIds: editions, title: edition.title ?? "",
+                                 author: nil, year: edition.year, keptKey: nil)
+        return try await apply([group], to: db)
     }
 
     // MARK: Une œuvre, plusieurs éditions
