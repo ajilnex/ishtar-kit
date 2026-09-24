@@ -524,10 +524,12 @@ struct Typographie: AsyncParsableCommand {
         let proposals = try await TypographyPass.proposals(in: database)
         let titres = proposals.filter { $0.newTitle != nil }.count
         let auteurs = proposals.filter { $0.newAuthor != nil }.count
-        print("Propositions : \(proposals.count) œuvres — \(titres) titres, \(auteurs) auteurs")
+        let sousTitres = proposals.filter { $0.newSubtitle != nil }.count
+        print("Propositions : \(proposals.count) œuvres — \(titres) titres, \(sousTitres) sous-titres, \(auteurs) auteurs")
         print(String(repeating: "─", count: 60))
         for p in proposals.prefix(exemples) {
             if let t = p.newTitle { print("titre   \(p.oldTitle)  →  \(t)") }
+            if let st = p.newSubtitle { print("sous-t. \(p.newTitle ?? p.oldTitle)  +  \(st)") }
             if let a = p.newAuthor { print("auteur  \(p.oldAuthor ?? "")  →  \(a)") }
         }
         if appliquer {

@@ -46,6 +46,38 @@ public enum TypographyRestorer {
         return embedded
     }
 
+    /// Titre propre et complément du titre (RDA-FR), quand le fichier porte
+    /// « Titre : sous-titre » et que la fiche n'a que le titre. La partie avant
+    /// le séparateur doit être le titre de la fiche au squelette près ; rend
+    /// le titre (éventuellement mieux écrit) et le sous-titre, ou nil.
+    public static func restoredSubtitle(current: String, embedded: String?) -> (title: String, subtitle: String)? {
+        guard let embedded = embedded?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !embedded.isEmpty, !isShouting(embedded), !skeleton(current).isEmpty
+        else { return nil }
+        for separator in [" : ", ": ", " — ", " – ", " - ", ". "] {
+            guard let range = embedded.range(of: separator) else { continue }
+            let head = embedded[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+            var tail = embedded[range.upperBound...].trimmingCharacters(in: .whitespaces)
+            // Scories des sites de téléchargement : « (Z-Library) », « (German
+            // Edition) », « (Vincent Kaufmann) » en fin de titre.
+            while let paren = tail.range(of: #"\s*\([^()]*\)\s*$"#, options: .regularExpression) {
+                tail.removeSubrange(paren)
+            }
+            let lowered = tail.lowercased()
+            let junk = ["z-library", "pdfdrive", "libgen", "anna's archive", "www.", ".com", ".pdf", ".epub", ".mobi", "edition)"]
+            // Un texte répété deux fois de suite trahit une métadonnée bricolée.
+            let words = tail.split(separator: " ")
+            let doubled = words.count >= 4 && words.count % 2 == 0
+                && Array(words[..<(words.count / 2)]) == Array(words[(words.count / 2)...])
+            guard skeleton(head) == skeleton(current), skeleton(tail).count >= 3, tail.count <= 120,
+                  !junk.contains(where: lowered.contains), !doubled
+            else { continue }
+            let title = richness(head) > richness(current) ? head : current
+            return (title, tail)
+        }
+        return nil
+    }
+
     /// Le nom d'auteur à retenir, ou nil. Admis : la même graphie enrichie
     /// (`Buttgen` → `Büttgen`), ou le nom complet dont le dernier mot est le
     /// nom de famille connu (`Buttgen` → `Philippe Büttgen`). Jamais un autre

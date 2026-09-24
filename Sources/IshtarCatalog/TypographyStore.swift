@@ -12,7 +12,7 @@ extension CatalogStore {
     ///
     /// - Returns: vrai si quelque chose a changé.
     @discardableResult
-    public func applyTypography(workId: UUID, title: String?,
+    public func applyTypography(workId: UUID, title: String?, subtitle: String? = nil,
                                 author: (from: String, to: String)?) async throws -> Bool {
         try await db.pool.write { conn in
             guard var work = try Work.fetchOne(conn, key: workId), work.confidence != .high else { return false }
@@ -20,9 +20,14 @@ extension CatalogStore {
 
             if let title, title != work.title {
                 work.title = title
-                try work.update(conn)
                 changed = true
             }
+            // Le complément du titre ne remplace jamais un sous-titre existant.
+            if let subtitle, work.subtitle?.isEmpty ?? true {
+                work.subtitle = subtitle
+                changed = true
+            }
+            if changed { try work.update(conn) }
 
             if let author, author.from != author.to,
                let link = try WorkCreator.fetchOne(conn, sql: """

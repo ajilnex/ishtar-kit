@@ -22,6 +22,22 @@ struct TypographyTests {
         #expect(TypographyRestorer.restoredTitle(current: "Ethique", embedded: "Microsoft Word - doc1") == nil)
     }
 
+    @Test("Sous-titre : repris quand la tête est le titre de la fiche")
+    func subtitles() {
+        let a = TypographyRestorer.restoredSubtitle(current: "Minima moralia", embedded: "Minima Moralia : réflexions sur la vie mutilée")
+        #expect(a?.subtitle == "réflexions sur la vie mutilée")
+        let b = TypographyRestorer.restoredSubtitle(current: "Debt", embedded: "Debt: The First 5,000 Years")
+        #expect(b?.title == "Debt" && b?.subtitle == "The First 5,000 Years")
+        let c = TypographyRestorer.restoredSubtitle(current: "Apres la finitude", embedded: "Après la finitude. Essai sur la nécessité de la contingence")
+        #expect(c?.title == "Après la finitude")
+        #expect(TypographyRestorer.restoredSubtitle(current: "Minima moralia", embedded: "Dialektik der Aufklärung : Philosophische Fragmente") == nil)
+        #expect(TypographyRestorer.restoredSubtitle(current: "Debt", embedded: "Debt") == nil)
+        #expect(TypographyRestorer.restoredSubtitle(current: "Die Torah", embedded: "Die Torah: eine deutsche Übersetzung (German Edition)")?.subtitle
+                == "eine deutsche Übersetzung")
+        #expect(TypographyRestorer.restoredSubtitle(current: "Energy and Civilization", embedded: "Energy and Civilization: A History ( PDFDrive.com ).mobi") == nil)
+        #expect(TypographyRestorer.restoredSubtitle(current: "La Faute à Mallarmé", embedded: "La Faute à Mallarmé: Laventure (Vincent Kaufmann) (Z-Library)")?.subtitle == "Laventure")
+    }
+
     @Test("Auteur : même nom enrichi, ou nom complet du même nom de famille")
     func authors() {
         #expect(TypographyRestorer.restoredAuthor(current: "Buttgen", embedded: "Philippe Büttgen") == "Philippe Büttgen")
