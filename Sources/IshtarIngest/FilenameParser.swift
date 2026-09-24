@@ -77,7 +77,7 @@ public enum FilenameParser {
             parts.removeLast()
         }
 
-        let author = parts[0].trimmingCharacters(in: .whitespaces)
+        let author = particleJoined(parts[0].trimmingCharacters(in: .whitespaces))
         let yearToken = parts[1].trimmingCharacters(in: .whitespaces)
 
         let year: String?
@@ -106,6 +106,16 @@ public enum FilenameParser {
             .trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { return nil }
         return MetadataGuess(title: title, author: author, year: year, confidence: .structured)
+    }
+
+    /// Dans `Auteur_Année_Titre`, une particule est collée au nom par un
+    /// trait d'union (`Van-Fraassen`, `Von-Wright`, `De-Tienne`, `Le-Guin`) :
+    /// c'est une seule personne, « Van Fraassen ». Pur.
+    static func particleJoined(_ author: String) -> String {
+        let particles: Set<String> = ["van", "von", "de", "du", "des", "le", "la", "di", "da", "del", "della", "der", "den", "ten", "ter", "vander"]
+        let parts = author.split(separator: "-").map(String.init)
+        guard parts.count >= 2, particles.contains(parts[0].lowercased()) else { return author }
+        return parts[0] + " " + parts.dropFirst().joined(separator: "-")
     }
 
     /// Convention Z-Library : `Titre (Auteur) (Z-Library).ext`, parfois avec plusieurs

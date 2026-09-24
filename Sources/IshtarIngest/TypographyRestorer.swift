@@ -86,6 +86,10 @@ public enum TypographyRestorer {
     /// (« Erik PORGE » → « Erik Porge »). Pur.
     public static func normalizedAuthor(_ raw: String) -> String {
         var name = raw.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: " ", options: .regularExpression)
+            // Crochets d'une notice mal lue : « David] David Spiegelhalter [Spiegelhalter ».
+            .replacingOccurrences(of: #"\[[^\]]*$|^[^\[]*\]"#, with: "", options: .regularExpression)
+            // Dates de vie en tête : « 1040-1105 Rashi ».
+            .replacingOccurrences(of: #"^\s*\d{3,4}\s*-\s*\d{3,4}\s+"#, with: "", options: .regularExpression)
             // Dates de vie à la manière des catalogues : « Deleuze, Gilles, 1925-1995 ».
             .replacingOccurrences(of: #",\s*\d{3,4}\s*-\s*(\d{3,4}|\.{0,4})\s*$"#, with: "", options: .regularExpression)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")

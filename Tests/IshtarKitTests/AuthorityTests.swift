@@ -253,3 +253,13 @@ struct DocumentKindTests {
         #expect(DocumentKind.classify(format: .pdf, pages: 90, opening: "Table des matières. Éditions du Seuil. ISBN 978") == .livre)
     }
 }
+
+@Suite("Noms : particules, crochets, dates en tête")
+struct NameCleanupTests {
+    @Test func cleanup() {
+        #expect(FilenameParser.parse(fileName: "Van-Fraassen_1989_Laws-and-Symmetry.pdf").author == "Van Fraassen")
+        #expect(FilenameParser.parse(fileName: "Merleau-Ponty_1945_Phenomenologie.pdf").author == "Merleau-Ponty")
+        #expect(TypographyRestorer.normalizedAuthor("David] David Spiegelhalter [Spiegelhalter") == "David Spiegelhalter")
+        #expect(TypographyRestorer.normalizedAuthor("1040-1105 Rashi") == "Rashi")
+    }
+}

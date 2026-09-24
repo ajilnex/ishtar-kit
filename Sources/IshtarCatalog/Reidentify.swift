@@ -135,4 +135,38 @@ extension CatalogStore {
             return (rows[0]["d"], rows[0]["e"], w)
         }
     }
+
+    /// Sépare une fiche de personne qui en nommait plusieurs (« Newen-Montemayor »)
+    /// en autant de personnes, à la même place dans chaque œuvre. Rend le
+    /// nombre d'œuvres touchées.
+    @discardableResult
+    public func splitCreator(named name: String, into names: [String]) async throws -> Int {
+        let clean = names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard clean.count >= 2 else { return 0 }
+        return try await db.pool.write { conn in
+            guard let old = try Creator.filter(Column("name") == name).fetchOne(conn) else { return 0 }
+            let links = try WorkCreator.filter(Column("creatorId") == old.id).fetchAll(conn)
+            for link in links {
+                // Les suivants se glissent après la place de l'ancien nom.
+                try conn.execute(sql: "UPDATE work_creator SET position = position + ? WHERE workId = ? AND role = ? AND position > ?",
+                                 arguments: [clean.count - 1, link.workId, link.role, link.position])
+                try link.delete(conn)
+                for (offset, n) in clean.enumerated() {
+                    let person = try Creator.filter(Column("name") == n).fetchOne(conn)
+                        ?? { let c = Creator(name: n); try c.insert(conn); return c }()
+                    try WorkCreator(workId: link.workId, creatorId: person.id, role: link.role, position: link.position + offset)
+                        .insert(conn, onConflict: .ignore)
+                }
+                try EditionKey.refreshProvisional(forWork: link.workId, conn)
+            }
+            try conn.execute(sql: "DELETE FROM authority_link WHERE entityType = 'creator' AND entityId = ?", arguments: [old.id])
+            try conn.execute(sql: "DELETE FROM creator WHERE id = ?", arguments: [old.id])
+            return links.count
+        }
+    }
+
+    /// L'identifiant d'une personne par son nom exact.
+    public func creatorId(named name: String) async throws -> UUID? {
+        try await db.pool.read { try UUID.fetchOne($0, sql: "SELECT id FROM creator WHERE name = ?", arguments: [name]) }
+    }
 }

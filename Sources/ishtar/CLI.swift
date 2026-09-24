@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self]
     )
 }
 
@@ -792,7 +792,7 @@ struct Ranger: AsyncParsableCommand {
             if r.verified { return true }
             let old = FilenameParser.parse(fileName: (r.from as NSString).lastPathComponent)
             let new = FilenameParser.parse(fileName: target)
-            if old.confidence == .structured, let a = old.author, let b = new.author,
+            if old.confidence == .structured, let a = old.author, let b = new.author, !Reidentification.isPlaceholder(a),
                Reidentification.family(a) != Reidentification.family(b.components(separatedBy: " & ").first ?? b)
                 && !Reidentification.sameAuthor(a, b) {
                 held.append((r, "le nom de fichier dit « \(a) »")); return false
@@ -944,5 +944,36 @@ struct Corriger: AsyncParsableCommand {
             done += 1
         }
         if appliquer { print("\(done) fiches corrigées.") }
+    }
+}
+
+// MARK: - Noms d'auteur (renommer, séparer)
+
+struct Auteurs: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Renomme ou sépare des fiches de personne d'après un fichier JSON : [{\"de\": \"Van-Fraassen\", \"vers\": [\"Bas C. van Fraassen\"]}]."
+    )
+
+    struct Entry: Decodable { let de: String; let vers: [String] }
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Fichier JSON.")
+    var fichier: String
+
+    @Flag(name: .long, help: "Écrit (sinon : seulement vérifier).")
+    var appliquer = false
+
+    func run() async throws {
+        let store = CatalogStore(db: try CatalogDatabase(at: db))
+        let entries = try JSONDecoder().decode([Entry].self, from: Data(contentsOf: URL(fileURLWithPath: fichier)))
+        for e in entries {
+            guard let id = try await store.creatorId(named: e.de) else { print("introuvable : \(e.de)"); continue }
+            print("\(e.de)  →  \(e.vers.joined(separator: " ; "))")
+            guard appliquer else { continue }
+            if e.vers.count == 1 { try await store.renameCreator(id, to: e.vers[0]) }
+            else { try await store.splitCreator(named: e.de, into: e.vers) }
+        }
     }
 }

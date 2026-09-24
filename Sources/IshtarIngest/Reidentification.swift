@@ -155,7 +155,7 @@ public enum Reidentification {
     static let machineWords: Set<String> = ["computers", "computer", "corporation", "microsoft", "adobe", "administrator",
                                             "admin", "user", "owner", "windows", "acrobat", "scanner", "calibre", "pdf"]
 
-    static func isPlaceholder(_ name: String?) -> Bool {
+    public static func isPlaceholder(_ name: String?) -> Bool {
         guard let name else { return true }
         let s = TypographyRestorer.skeleton(name)
         if s.isEmpty || placeholders.contains(s) { return true }
