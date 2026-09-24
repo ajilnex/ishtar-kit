@@ -954,7 +954,9 @@ struct Auteurs: AsyncParsableCommand {
         abstract: "Renomme ou sépare des fiches de personne d'après un fichier JSON : [{\"de\": \"Van-Fraassen\", \"vers\": [\"Bas C. van Fraassen\"]}]."
     )
 
-    struct Entry: Decodable { let de: String; let vers: [String] }
+    /// `tri` : la forme de classement, quand l'autorité se trompe de nom de
+    /// famille (« Viveiros de Castro, Eduardo »).
+    struct Entry: Decodable { let de: String; let vers: [String]; let tri: String? }
 
     @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
     var db: URL
@@ -972,7 +974,10 @@ struct Auteurs: AsyncParsableCommand {
             guard let id = try await store.creatorId(named: e.de) else { print("introuvable : \(e.de)"); continue }
             print("\(e.de)  →  \(e.vers.joined(separator: " ; "))")
             guard appliquer else { continue }
-            if e.vers.count == 1 { try await store.renameCreator(id, to: e.vers[0]) }
+            if e.vers.count == 1 {
+                let kept = try await store.renameCreator(id, to: e.vers[0])
+                if let tri = e.tri { try await store.setSortName(tri, forCreator: kept) }
+            }
             else { try await store.splitCreator(named: e.de, into: e.vers) }
         }
     }

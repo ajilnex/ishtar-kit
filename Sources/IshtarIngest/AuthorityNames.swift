@@ -15,7 +15,9 @@ public struct AuthorityName: Sendable, Equatable {
 /// Donne aux auteurs reliés à une autorité la forme de leur nom que retient
 /// l'usage (libellé Wikidata, sinon la forme IdRef remise à l'endroit), et la
 /// forme de classement qui en découle (NORMES §6). Deux fiches de la même
-/// personne prennent le même nom et fusionnent (`renameCreator`).
+/// personne prennent le même nom et fusionnent (`renameCreator`). Une
+/// personne qui a déjà sa forme de classement (posée par cette passe ou à la
+/// main : « Viveiros de Castro, Eduardo ») n'est plus touchée.
 public enum AuthorityNames {
     /// La forme de classement d'un nom d'usage, d'après le nom de famille de
     /// la forme autorisée (tout ce qui précède la virgule, particules
@@ -55,6 +57,7 @@ public enum AuthorityNames {
                 FROM creator c
                 JOIN authority_link i ON i.entityType = 'creator' AND i.entityId = c.id AND i.scheme = 'idref' AND i.status = 'confirmed'
                 LEFT JOIN authority_link w ON w.entityType = 'creator' AND w.entityId = c.id AND w.scheme = 'wikidata' AND w.status = 'confirmed'
+                WHERE c.sortName IS NULL OR c.sortName = ''
                 """)
         }
         let labels = try await wikidata.labels(of: rows.compactMap { $0["qid"] as String? })
