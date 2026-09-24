@@ -160,6 +160,7 @@ instantané lisible sans Ishtar :
   jamais un manifeste qui annonce des fichiers absents) :
   ```
   { "version": 1, "generatedAt": "<ISO 8601>", "library": "<nom du dossier>",
+    "fonds": { "id": "aj", "nom": "aj" }?,
     "editions": [ { "key", "title", "subtitle"?, "authors": [..],
                     "year"?, "editionYear"?, "publisher"?, "language"?,
                     "isbn13"?, "doi"?, "discipline"?, "collections": [..],
@@ -167,7 +168,9 @@ instantané lisible sans Ishtar :
                     "files": [ { "sha256", "path", "format", "size" } ] } ] }
   ```
   `path` est **relatif** à la racine de la bibliothèque. `year` est l'année
-  de l'œuvre ; `editionYear` n'apparaît que si elle en diffère.
+  de l'œuvre ; `editionYear` n'apparaît que si elle en diffère. `fonds`
+  (facultatif, `--fonds`) dit de qui vient la bibliothèque : un site qui
+  réunit plusieurs publications peut ainsi montrer chaque fonds à part.
 - `covers/<sha256>.png` — les vignettes d'Ishtar, par empreinte de fichier.
 - `catalog.sqlite` — copie de ce schéma **réduite aux documents publiés**
   (textes extraits compris) ; les conversations du démon en sont retirées.

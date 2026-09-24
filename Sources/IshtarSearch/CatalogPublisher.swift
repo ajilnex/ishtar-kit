@@ -15,7 +15,21 @@ public struct PublishedCatalogue: Codable, Sendable, Equatable {
     public var generatedAt: Date
     /// Nom du dossier de la bibliothèque (jamais son chemin absolu).
     public var library: String
+    /// Le fonds : de qui vient cette bibliothèque (provenance). Facultatif.
+    public var fonds: PublishedFonds?
     public var editions: [PublishedEdition]
+}
+
+/// La provenance d'une bibliothèque publiée : un identifiant court et stable
+/// (« aj »), et le nom sous lequel le fonds se présente.
+public struct PublishedFonds: Codable, Sendable, Equatable {
+    public var id: String
+    public var nom: String
+
+    public init(id: String, nom: String) {
+        self.id = id
+        self.nom = nom
+    }
 }
 
 public struct PublishedEdition: Codable, Sendable, Equatable {
@@ -92,7 +106,7 @@ public struct CatalogPublisher: Sendable {
     /// Un document n'est publié que s'il est présent, non ignoré, pourvu d'une
     /// empreinte (c'est par elle qu'on le télécharge), rangé sous la racine,
     /// et hors des exclusions. Une même empreinte n'est publiée qu'une fois.
-    public func build(root: String, rules: PublicationRules,
+    public func build(root: String, rules: PublicationRules, fonds: PublishedFonds? = nil,
                       now: Date = Date()) async throws -> (PublishedCatalogue, PublicationReport) {
         let rootPath = URL(fileURLWithPath: root).standardizedFileURL.path
         let rows = try await LibraryOverview(db: db).rows()
@@ -170,6 +184,7 @@ public struct CatalogPublisher: Sendable {
             version: PublishedCatalogue.formatVersion,
             generatedAt: now,
             library: URL(fileURLWithPath: rootPath).lastPathComponent,
+            fonds: fonds,
             editions: published
         )
         return (catalogue, report)
@@ -188,12 +203,12 @@ public struct CatalogPublisher: Sendable {
     /// intégraux, lourde à transporter ; seulement quand un outil en a besoin.
     @discardableResult
     public func publish(root: String, rules: PublicationRules, to outputFolder: URL,
-                        coversFolder: URL? = nil, includeDatabase: Bool = false,
+                        coversFolder: URL? = nil, includeDatabase: Bool = false, fonds: PublishedFonds? = nil,
                         renderCover: (@Sendable (URL) async -> Data?)? = nil,
                         now: Date = Date()) async throws -> PublicationReport {
         let fm = FileManager.default
         try fm.createDirectory(at: outputFolder, withIntermediateDirectories: true)
-        let (catalogue, built) = try await build(root: root, rules: rules, now: now)
+        let (catalogue, built) = try await build(root: root, rules: rules, fonds: fonds, now: now)
         var report = built
 
         // 1. Base réduite, pour la recherche plein texte côté serveur.

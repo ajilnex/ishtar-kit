@@ -460,6 +460,12 @@ struct Publish: AsyncParsableCommand {
     @Option(name: .long, help: "Préfixe de titre à ne pas publier. Répétable.")
     var excludeTitlePrefix: [String] = []
 
+    @Option(name: .long, help: "Identifiant court du fonds (provenance), par exemple « aj ».")
+    var fonds: String?
+
+    @Option(name: .long, help: "Nom sous lequel le fonds se présente (défaut : son identifiant).")
+    var fondsNom: String?
+
     @Flag(name: .long, help: "Fabrique les couvertures absentes du dossier de vignettes (QuickLook, 1re page).")
     var renderCovers = false
 
@@ -475,15 +481,16 @@ struct Publish: AsyncParsableCommand {
         try await CatalogStore(db: database).assignMissingKeys()
         let rules = PublicationRules(excludedFolders: exclude, excludedTitlePrefixes: excludeTitlePrefix)
         let publisher = CatalogPublisher(db: database)
+        let provenance = fonds.map { PublishedFonds(id: $0, nom: fondsNom ?? $0) }
 
         let report: PublicationReport
         if dryRun {
-            report = try await publisher.build(root: root, rules: rules).1
+            report = try await publisher.build(root: root, rules: rules, fonds: provenance).1
         } else {
             let render: (@Sendable (URL) async -> Data?)? = renderCovers
                 ? { @Sendable url in await CoverRenderer.png(for: url, strictness: 0.5) } : nil
             report = try await publisher.publish(root: root, rules: rules, to: out, coversFolder: covers,
-                                                 includeDatabase: withDatabase, renderCover: render)
+                                                 includeDatabase: withDatabase, fonds: provenance, renderCover: render)
         }
         print(dryRun ? "Publication (essai à blanc)" : "Publié dans \(out.path)")
         print(String(repeating: "─", count: 60))

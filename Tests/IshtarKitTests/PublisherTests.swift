@@ -55,6 +55,10 @@ struct PublisherTests {
         #expect(edition.key == "Adorno1951Minima")
         #expect(edition.files == [PublishedFile(sha256: "aaa", path: "Adorno_1951_Minima.pdf", format: "pdf", size: 10)])
         #expect(catalogue.library == "Bibliothèque")
+        #expect(catalogue.fonds == nil)
+        let avecFonds = try await CatalogPublisher(db: try await seeded())
+            .build(root: root, rules: rules, fonds: PublishedFonds(id: "aj", nom: "aj")).0
+        #expect(avecFonds.fonds == PublishedFonds(id: "aj", nom: "aj"))
         #expect(report.excludedByRule == 2)
         #expect(report.excludedMissingOrIgnored == 2)
     }
