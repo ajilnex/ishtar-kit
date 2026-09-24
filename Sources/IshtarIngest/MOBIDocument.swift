@@ -114,6 +114,37 @@ public struct MOBIDocument: Sendable {
         }
     }
 
+    // MARK: - Couverture
+
+    /// L'image de couverture que porte le livre (JPEG, PNG ou GIF), ou nil.
+    /// EXTH n° 201 donne son rang parmi les ressources, à compter du premier
+    /// enregistrement d'image ; à défaut, la vignette (EXTH n° 202).
+    /// Lecture seule, sans décompression du texte.
+    public static func coverImage(fileURL: URL) -> Data? {
+        guard let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe),
+              let pdb = try? PalmDatabase(data: data),
+              let record0 = pdb.record(0),
+              let headers = try? Headers(record: record0),
+              headers.firstImage >= 0
+        else { return nil }
+        for type in [201, 202] {
+            guard let raw = headers.exth.records[type]?.first, raw.count >= 4 else { continue }
+            let offset = FormatDetector.be32(raw, raw.startIndex)
+            guard offset != 0xFFFF_FFFF, let image = pdb.record(headers.firstImage + Int(offset)),
+                  isImage(image) else { continue }
+            return image
+        }
+        return nil
+    }
+
+    static func isImage(_ data: Data) -> Bool {
+        let b = [UInt8](data.prefix(4))
+        guard b.count == 4 else { return false }
+        return (b[0] == 0xFF && b[1] == 0xD8)                       // JPEG
+            || (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E)       // PNG
+            || (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46)       // GIF
+    }
+
     // MARK: - En-têtes PalmDOC + MOBI + EXTH
 
     struct Headers {
@@ -125,6 +156,8 @@ public struct MOBIDocument: Sendable {
         var huffRecord = 0
         var huffCount = 0
         var trailingFlags = 0
+        /// Premier enregistrement de ressource (images) ; 0xFFFFFFFF = aucun.
+        var firstImage = -1
         var embeddedTitle: Data?
         var exth = EXTH()
 
@@ -150,6 +183,10 @@ public struct MOBIDocument: Sendable {
                     embeddedTitle = record.subdata(
                         in: (base + titleOffset) ..< (base + titleOffset + titleLength))
                 }
+            }
+            if record.count >= 112 {
+                let index = FormatDetector.be32(record, base + 108)
+                firstImage = index == 0xFFFF_FFFF ? -1 : Int(index)
             }
             if record.count >= 120 {
                 huffRecord = Int(FormatDetector.be32(record, base + 112))

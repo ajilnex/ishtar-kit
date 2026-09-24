@@ -22,6 +22,14 @@ public enum CoverRenderer {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         let isPDF = fileURL.pathExtension.lowercased() == "pdf"
 
+        // Kindle (MOBI, AZW, AZW3) : QuickLook ne sait pas les lire, mais le
+        // fichier porte sa couverture — on la prend telle quelle.
+        if ["mobi", "azw", "azw3", "prc"].contains(fileURL.pathExtension.lowercased()),
+           let raw = MOBIDocument.coverImage(fileURL: fileURL),
+           let image = scaled(raw) {
+            return encode(image)
+        }
+
         let request = QLThumbnailGenerator.Request(
             fileAt: fileURL, size: pointSize, scale: scale, representationTypes: .thumbnail)
         if let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request),
@@ -57,6 +65,17 @@ public enum CoverRenderer {
         context.translateBy(x: -box.minX, y: -box.minY)
         context.drawPDFPage(page)
         return context.makeImage()
+    }
+
+    /// Une image quelconque ramenée à la taille des vignettes, proportions gardées.
+    static func scaled(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(pointSize.height * scale),
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     static func encode(_ image: CGImage) -> Data? {

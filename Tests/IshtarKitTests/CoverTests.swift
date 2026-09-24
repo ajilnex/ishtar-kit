@@ -150,3 +150,23 @@ struct CoverStatisticsTests {
         #expect(CoverInspector.judge(stats, strictness: 1) == nil)
     }
 }
+
+@Suite("Couverture des livres Kindle")
+struct MOBICoverTests {
+    @Test("Seules de vraies images sont reconnues comme couverture")
+    func signatures() {
+        #expect(MOBIDocument.isImage(Data([0xFF, 0xD8, 0xFF, 0xE0])))
+        #expect(MOBIDocument.isImage(Data([0x89, 0x50, 0x4E, 0x47])))
+        #expect(MOBIDocument.isImage(Data("GIF8".utf8)))
+        #expect(!MOBIDocument.isImage(Data("EXTH".utf8)))
+        #expect(!MOBIDocument.isImage(Data([0xFF])))
+    }
+
+    @Test("Un fichier qui n'est pas un MOBI ne donne pas de couverture")
+    func notMOBI() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pas-un-mobi-\(UUID()).mobi")
+        try Data(repeating: 0, count: 200).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(MOBIDocument.coverImage(fileURL: url) == nil)
+    }
+}
