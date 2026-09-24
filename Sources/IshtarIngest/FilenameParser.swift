@@ -11,6 +11,7 @@ public enum FilenameParser {
         let stem = (fileName as NSString).deletingPathExtension
 
         if let guess = parseAnnasArchive(stem: stem) { return guess }
+        if let guess = parseLabel(stem: stem) { return guess }
         if let guess = parseAuthorYearTitle(stem: stem) { return guess }
         if let guess = parseZLibrary(stem: stem) { return guess }
         if let guess = parseScribd(stem: stem) { return guess }
@@ -20,6 +21,19 @@ public enum FilenameParser {
             .replacingOccurrences(of: "-", with: " ")
             .trimmingCharacters(in: .whitespaces)
         return MetadataGuess(title: cleaned.isEmpty ? stem : cleaned, confidence: .fallback)
+    }
+
+    /// L'étiquette d'Ishtar en mode « bibliothèque confiée » (`FileLabel`) :
+    /// `Adorno — Minima moralia (1951).pdf`, `Aristote — Traité du ciel
+    /// (350 av. J.-C.).pdf`, `Adorno — Minima moralia (1951, éd. 2003) [2].pdf`.
+    /// Le tiret cadratin encadré d'espaces la distingue de toute autre convention.
+    static func parseLabel(stem: String) -> MetadataGuess? {
+        let pattern = /^(?<author>.+?) — (?<title>.+?)(?: \((?<year>\d{1,4})(?<bce> av\. J\.-C\.)?(?:, éd\. \d{1,4}(?: av\. J\.-C\.)?)?\))?(?: \[\d+\])?$/
+        guard let m = stem.precomposedStringWithCanonicalMapping.wholeMatch(of: pattern) else { return nil }
+        let author = String(m.author), title = String(m.title)
+        guard !author.isEmpty, !title.isEmpty else { return nil }
+        let year = m.year.map { (m.bce != nil ? "-" : "") + String($0) }
+        return MetadataGuess(title: title, author: author == "Anonyme" ? nil : author, year: year, confidence: .structured)
     }
 
     /// Convention `Titre -- Auteur -- Éditeur, Année -- isbn13 XXXX -- hash -- Anna's Archive`.

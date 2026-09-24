@@ -87,7 +87,7 @@ public enum Reidentification {
         }
     }
 
-    static func family(_ name: String?) -> String {
+    public static func family(_ name: String?) -> String {
         guard let name, !name.isEmpty else { return "" }
         return AuthorityPass.family(ofName: TypographyRestorer.normalizedAuthor(name))
     }
@@ -215,7 +215,7 @@ public enum Reidentification {
     /// Deux noms désignent-ils la même personne ? Même nom de famille, ou
     /// l'un est une suite de mots de l'autre (« Adin » / « Adin Steinsaltz »,
     /// « DeVries » / « Willem A. de Vries », « Dante » / « Dante Alighieri »).
-    static func sameAuthor(_ a: String?, _ b: String?) -> Bool {
+    public static func sameAuthor(_ a: String?, _ b: String?) -> Bool {
         guard let a, let b, !isPlaceholder(a), !isPlaceholder(b) else { return false }
         if TypographyRestorer.isNameList(a) || TypographyRestorer.isNameList(b) { return false }
         if family(a) == family(b) { return true }

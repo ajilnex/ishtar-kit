@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self]
     )
 }
 
@@ -680,5 +680,146 @@ struct Reidentifier: AsyncParsableCommand {
             print(String(repeating: "─", count: 60))
             print("\(n) relectures appliquées, \(m) attributions corrigées.")
         }
+    }
+}
+
+// MARK: - Langues
+
+struct Langues: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Reconnaît la langue des éditions sur leur texte (local, sans réseau)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Écrit les langues (sinon : seulement les montrer).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let proposals = try await LanguagePass.proposals(in: database)
+        let counts = Dictionary(grouping: proposals, by: \.language).mapValues(\.count).sorted { $0.value > $1.value }
+        print("Langues reconnues : \(proposals.count) — " + counts.map { "\($0.key) \($0.value)" }.joined(separator: ", "))
+        if appliquer {
+            try await LanguagePass.apply(proposals, to: database)
+            print("Appliqué.")
+        }
+    }
+}
+
+// MARK: - Traductions
+
+struct Traductions: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Relie originaux et traductions possédés sous une même œuvre (Wikidata ; auteurs reliés). Réseau."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Écrit les rattachements (sinon : seulement les montrer).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        var links: [AuthorityLink] = []
+        let groups = try await TranslationPass.proposals(in: database, links: &links)
+        print("Œuvres reconnues dans Wikidata : \(links.count) — réunions : \(groups.count)")
+        print(String(repeating: "─", count: 60))
+        for g in groups {
+            print("\(g.originalTitle ?? g.label) (\(g.originalLanguage ?? "?"), \(g.year ?? "s.d.")) [\(g.qid)]")
+            for w in g.works { print("   \(w.title)  \(w.languages.joined(separator: ","))") }
+        }
+        if appliquer {
+            let n = try await TranslationPass.apply(groups, links: links, to: database)
+            print(String(repeating: "─", count: 60))
+            print("\(n) œuvres réunies à leur original ou à leurs sœurs.")
+        }
+    }
+}
+
+// MARK: - Ranger (bibliothèque confiée)
+
+struct Ranger: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Renomme les fichiers d'après leur fiche : « Adorno — Minima moralia (1951).pdf ». Journal pour défaire."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Racine de la bibliothèque.")
+    var racine: String
+
+    @Option(name: .long, help: "Dossier à laisser tel quel (répétable) : espaces de travail, mangas…")
+    var exclure: [String] = []
+
+    @Option(name: .long, help: "Ne renommer que les N premiers (essai).")
+    var limite: Int?
+
+    @Flag(name: .long, help: "Renomme (sinon : seulement montrer).")
+    var appliquer = false
+
+    @Option(name: .long, help: "Journal des renommages (TSV : ancien, nouveau).")
+    var journal: String = "\(NSHomeDirectory())/Library/Logs/ishtar-ranger.tsv"
+
+    @Option(name: .long, help: "Défait les renommages de ce journal (du dernier au premier).")
+    var defaire: String?
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let store = CatalogStore(db: database)
+        if let defaire {
+            let lines = try String(contentsOfFile: defaire, encoding: .utf8).split(separator: "\n").reversed()
+            var n = 0
+            for line in lines {
+                let f = line.split(separator: "\t").map(String.init)
+                guard f.count == 3, let id = UUID(uuidString: f[0]) else { continue }
+                if try await store.perform(Renaming(documentId: id, from: f[2], to: f[1])) { n += 1 }
+            }
+            print("\(n) renommages défaits.")
+            return
+        }
+        var plan = try await store.arrangement(root: racine, excludedFolders: Set(exclure))
+        // Gardes : un nom de fichier qui désigne un autre auteur que la fiche
+        // est un conflit non résolu (le nom de fichier est un témoin : on ne
+        // l'efface pas) ; les fiches « TRIER » attendent Aubin.
+        var held: [(Renaming, String)] = []
+        plan = plan.filter { r in
+            let target = (r.to as NSString).lastPathComponent
+            if target.contains("TRIER") { held.append((r, "à trier")); return false }
+            let old = FilenameParser.parse(fileName: (r.from as NSString).lastPathComponent)
+            let new = FilenameParser.parse(fileName: target)
+            if old.confidence == .structured, let a = old.author, let b = new.author,
+               Reidentification.family(a) != Reidentification.family(b.components(separatedBy: " & ").first ?? b)
+                && !Reidentification.sameAuthor(a, b) {
+                held.append((r, "le nom de fichier dit « \(a) »")); return false
+            }
+            return true
+        }
+        if let limite { plan = Array(plan.prefix(limite)) }
+        if !held.isEmpty {
+            print("Laissés tels quels : \(held.count)")
+            for (r, why) in held.prefix(appliquer ? held.count : 20) { print("   \((r.from as NSString).lastPathComponent) — \(why)") }
+        }
+        print("Renommages : \(plan.count)")
+        for r in plan.prefix(appliquer ? plan.count : 40) {
+            print("\((r.from as NSString).lastPathComponent)\n   → \((r.to as NSString).lastPathComponent)")
+        }
+        guard appliquer else { return }
+        // Le journal s'allonge, il n'est jamais écrasé : chaque ligne défait un geste.
+        if !FileManager.default.fileExists(atPath: journal) { FileManager.default.createFile(atPath: journal, contents: nil) }
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: journal))
+        try handle.seekToEnd()
+        var done = 0
+        for r in plan {
+            if try await store.perform(r) {
+                try handle.write(contentsOf: Data("\(r.documentId.uuidString)\t\(r.from)\t\(r.to)\n".utf8))
+                done += 1
+            }
+        }
+        try handle.close()
+        print("\(done) fichiers renommés. Journal : \(journal)")
     }
 }

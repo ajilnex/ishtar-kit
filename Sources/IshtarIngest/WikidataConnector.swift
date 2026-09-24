@@ -13,6 +13,8 @@ public struct WikidataWork: Sendable, Equatable {
     public var year: String?
     /// Libellé français, sinon anglais, sinon le premier titre.
     public var label: String
+    /// Libellé dans la langue de l'œuvre, s'il existe : son titre original.
+    public var originalTitle: String?
 }
 
 /// Étage 3 (opt-in, réseau) : le point d'accès SPARQL de Wikidata. Décodage
@@ -136,7 +138,7 @@ public struct WikidataConnector: Sendable {
             guard let uri = row["w"]?["value"] as? String, let qid = qid(uri),
                   let title = row["t"]?["value"] as? String else { continue }
             if byQID[qid] == nil {
-                byQID[qid] = WikidataWork(qid: qid, titles: [], language: nil, year: nil, label: title)
+                byQID[qid] = WikidataWork(qid: qid, titles: [], language: nil, year: nil, label: title, originalTitle: nil)
                 order.append(qid)
             }
             if !byQID[qid]!.titles.contains(title) { byQID[qid]!.titles.append(title) }
@@ -152,6 +154,7 @@ public struct WikidataConnector: Sendable {
         }
         for qid in order {
             if let l = labels[qid], let best = l["fr"] ?? l["en"] { byQID[qid]!.label = best }
+            if let lang = byQID[qid]!.language { byQID[qid]!.originalTitle = labels[qid]?[lang] }
         }
         return order.compactMap { byQID[$0] }
     }

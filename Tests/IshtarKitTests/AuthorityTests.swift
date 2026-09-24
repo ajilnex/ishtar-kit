@@ -216,3 +216,27 @@ struct AuthorityNameTests {
         #expect(l["Q152388"] == "Theodor W. Adorno" && l["Q859"] == "Plato")
     }
 }
+
+@Suite("Étiquette des fichiers (bibliothèque confiée)")
+struct FileLabelTests {
+    @Test("Nom de famille d'abord, antiquité, deux auteurs, interdits d'exFAT")
+    func labels() {
+        #expect(FileLabel.name(families: ["Adorno"], title: "Minima moralia", year: "1951", ext: "PDF") == "Adorno — Minima moralia (1951).pdf")
+        #expect(FileLabel.name(families: ["Aristote"], title: "Traité du ciel", year: "-350", ext: "pdf") == "Aristote — Traité du ciel (350 av. J.-C.).pdf")
+        #expect(FileLabel.name(families: ["Deleuze", "Guattari"], title: "Mille plateaux", year: "1980", ext: "epub") == "Deleuze & Guattari — Mille plateaux (1980).epub")
+        #expect(FileLabel.name(families: ["Hogrebe", "Gabriel", "Grant"], title: "Predication and Genesis", year: nil, ext: "pdf") == "Hogrebe et al. — Predication and Genesis.pdf")
+        #expect(FileLabel.name(families: ["Rosenberg"], title: "Wilfrid Sellars: Fusing the Images", year: "2007", ext: "pdf") == "Rosenberg — Wilfrid Sellars – Fusing the Images (2007).pdf")
+        #expect(FileLabel.name(families: ["Deleuze"], title: "Qu'est-ce que la philosophie ?", year: "1991", ext: "epub") == "Deleuze — Qu'est-ce que la philosophie (1991).epub")
+        #expect(FileLabel.name(families: ["Adorno"], title: "Minima moralia", year: "1951", editionYear: "2003", ext: "pdf", copy: 2) == "Adorno — Minima moralia (1951, éd. 2003) [2].pdf")
+        #expect(FileLabel.family(ofName: "Simone de Beauvoir", sortName: "Beauvoir, Simone de") == "Beauvoir")
+    }
+
+    @Test("L'étiquette se relit")
+    func roundTrip() {
+        let a = FilenameParser.parse(fileName: "Aristote — Traité du ciel (350 av. J.-C.).pdf")
+        #expect(a.author == "Aristote" && a.title == "Traité du ciel" && a.year == "-350" && a.confidence == .structured)
+        let b = FilenameParser.parse(fileName: "Adorno — Minima moralia (1951, éd. 2003) [2].pdf")
+        #expect(b.author == "Adorno" && b.title == "Minima moralia" && b.year == "1951")
+        #expect(FilenameParser.parse(fileName: "Anonyme — Les Mille et Une Nuits.epub").author == nil)
+    }
+}
