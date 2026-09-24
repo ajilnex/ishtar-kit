@@ -3,6 +3,7 @@ import Foundation
 import GRDB
 @testable import IshtarCatalog
 @testable import IshtarIngest
+@testable import IshtarSearch
 
 @Suite("Autorités : Sudoc, IdRef, Wikidata")
 struct AuthorityTests {
@@ -238,5 +239,17 @@ struct FileLabelTests {
         let b = FilenameParser.parse(fileName: "Adorno — Minima moralia (1951, éd. 2003) [2].pdf")
         #expect(b.author == "Adorno" && b.title == "Minima moralia" && b.year == "1951")
         #expect(FilenameParser.parse(fileName: "Anonyme — Les Mille et Une Nuits.epub").author == nil)
+    }
+}
+
+@Suite("Genre : livre ou article")
+struct DocumentKindTests {
+    @Test("Formats de livres, pages et marques")
+    func kinds() {
+        #expect(DocumentKind.classify(format: .epub, pages: 12, opening: "") == .livre)
+        #expect(DocumentKind.classify(format: .pdf, pages: 20, opening: "Philosophical Studies, Vol. 39, pp. 325-345, JSTOR") == .article)
+        #expect(DocumentKind.classify(format: .pdf, pages: 20, opening: "C H A P T E R 8.1 The Moon and Sixpence") == .article)
+        #expect(DocumentKind.classify(format: .pdf, pages: 341, opening: "Oxford University Press, ISBN") == .livre)
+        #expect(DocumentKind.classify(format: .pdf, pages: 90, opening: "Table des matières. Éditions du Seuil. ISBN 978") == .livre)
     }
 }
