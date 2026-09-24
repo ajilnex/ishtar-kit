@@ -93,6 +93,9 @@ public struct CatalogStore: Sendable {
                 document.confidence = .high
                 try document.update(conn)
             }
+
+            // Une clé encore provisoire suit la fiche corrigée.
+            try EditionKey.refreshProvisional(forWork: workId, conn)
         }
     }
 
@@ -162,6 +165,8 @@ public struct CatalogStore: Sendable {
             doc.curationStatus = .recognized
             doc.confidence = .probable
             try doc.update(conn)
+
+            try EditionKey.refreshProvisional(forWork: workId, conn)
         }
     }
 

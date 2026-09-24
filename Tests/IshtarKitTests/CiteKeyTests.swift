@@ -29,6 +29,15 @@ struct CiteKeyTests {
         #expect(CiteKeyGenerator.words("Straße") == ["Strasse"])
     }
 
+    @Test("Noms composés entiers, casse d'origine gardée, capitales ramenées")
+    func names() {
+        #expect(CiteKeyGenerator.base(author: "De-Tienne", year: "2022", title: "Creating") == "DeTienne2022Creating")
+        #expect(CiteKeyGenerator.base(author: "Maurice Merleau-Ponty", year: "1945",
+                                      title: "Phénoménologie de la perception") == "MerleauPonty1945Phenomenologie")
+        #expect(CiteKeyGenerator.base(author: "John McDowell", year: "1994", title: "Mind and World") == "McDowell1994Mind")
+        #expect(CiteKeyGenerator.base(author: "FOUCAULT", year: "1975", title: "SURVEILLER ET PUNIR") == "Foucault1975Surveiller")
+    }
+
     @Test("Sans auteur ni année : Anon, ND")
     func fallbacks() {
         #expect(CiteKeyGenerator.base(author: nil, year: "ND", title: "Preface") == "AnonNDPreface")
@@ -117,6 +126,44 @@ struct CiteKeyTests {
         await #expect(throws: CiteKeyError.invalid("Kant 1781")) {
             try await store.setKey("Kant 1781", forEdition: b)
         }
+    }
+
+    @Test("Clé provisoire : suit la fiche corrigée ; figée ou manuelle : ne bouge plus")
+    func provisionalFollowsCorrection() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let store = CatalogStore(db: db)
+        let first = try await addEdition(db, author: "Sellars", title: "Recursivity", editionYear: "ND")
+        let second = try await addEdition(db, author: "Sellars", title: "Autre", editionYear: "ND")
+        try await store.assignMissingKeys()
+        #expect(try await store.key(forEdition: first)?.key == "SellarsNDRecursivity")
+
+        func workId(_ edition: UUID) async throws -> UUID {
+            try await db.pool.read { try Edition.fetchOne($0, key: edition)!.workId }
+        }
+        func documentId(_ edition: UUID) async throws -> UUID {
+            try await db.pool.write { conn in
+                let doc = Document(editionId: edition, filePath: "/\(edition)", originalFileName: "x",
+                                   fileSize: 1, format: .pdf)
+                try doc.insert(conn)
+                return doc.id
+            }
+        }
+
+        // Provisoire : la correction humaine de la fiche recalcule la clé.
+        try await store.applyUserEdit(workId: try await workId(first), editionId: first,
+                                      documentId: try await documentId(first),
+                                      edit: RecordEdit(title: "Recursivity and Contingency",
+                                                       authors: ["Yuk Hui"], year: "2019"))
+        #expect(try await store.key(forEdition: first)?.key == "Hui2019Recursivity")
+
+        // Figée : plus rien ne la change.
+        _ = try await db.pool.write { try EditionKey.stabilize($0) }
+        try await store.applyUserEdit(workId: try await workId(second), editionId: second,
+                                      documentId: try await documentId(second),
+                                      edit: RecordEdit(title: "Science and Metaphysics",
+                                                       authors: ["Wilfrid Sellars"], year: "1968"))
+        #expect(try await store.key(forEdition: second)?.key == "SellarsNDAutre")
+        #expect(try await store.key(forEdition: second)?.origin == .stable)
     }
 
     @Test("La clé disparaît avec son édition")

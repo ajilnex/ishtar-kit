@@ -2,16 +2,21 @@ import Foundation
 import GRDB
 
 /// La clé de citation d'une édition : ce qu'un billet écrit pour la citer
-/// (`Adorno1951Minima`). Elle circule hors d'Ishtar — Zotero, sites, BibTeX —
-/// d'où sa règle cardinale : **une clé attribuée ne change plus d'elle-même.**
-/// Corriger un titre ou un auteur ne la recalcule pas ; seule une correction
-/// humaine de la clé elle-même la remplace.
+/// (`Adorno1951Minima`). Elle a trois états :
+///
+/// - `generated` — **provisoire** : calculée depuis la fiche, elle suit ses
+///   corrections tant que personne ne la cite ;
+/// - `stable` — figée au moment où elle sort vers un outil de citation
+///   (Zotero, BibTeX) : dès lors, **elle ne change plus d'elle-même** ;
+/// - `manual` — saisie par l'utilisateur, jamais touchée par une machine.
 public struct EditionKey: Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {
     public static let databaseTableName = "edition_key"
 
     public enum Origin: String, Codable, Sendable, DatabaseValueConvertible {
-        /// Calculée par `CiteKeyGenerator`.
+        /// Calculée par `CiteKeyGenerator`, provisoire.
         case generated
+        /// Figée : elle a été exportée, quelqu'un peut la citer.
+        case stable
         /// Saisie ou corrigée par l'utilisateur.
         case manual
     }
@@ -66,9 +71,23 @@ public enum CiteKeyGenerator {
             .map(String.init)
     }
 
+    /// Initiale capitale, le reste tel quel (« McDowell ») — sauf un mot tout
+    /// en capitales, ramené à la casse ordinaire (« FOUCAULT » → « Foucault »).
     static func capitalized(_ word: String) -> String {
         guard let first = word.first else { return word }
-        return first.uppercased() + word.dropFirst().lowercased()
+        let rest = word.dropFirst()
+        let shouting = word.count > 1 && word == word.uppercased()
+        return first.uppercased() + (shouting ? rest.lowercased() : String(rest))
+    }
+
+    /// Nom de famille : le dernier mot séparé par des espaces, entier — un nom
+    /// composé à trait d'union (« De-Tienne », « Merleau-Ponty ») reste d'un
+    /// seul tenant.
+    static func family(_ author: String) -> String? {
+        guard let last = author.split(whereSeparator: \.isWhitespace).last else { return nil }
+        let parts = words(String(last))
+        guard !parts.isEmpty else { return nil }
+        return parts.map(capitalized).joined()
     }
 
     /// Les quatre chiffres d'une année (« 1951 », « c. 1951 », « 1951-1953 »),
@@ -89,7 +108,7 @@ public enum CiteKeyGenerator {
 
     /// La clé de base, sans désambiguïsation.
     public static func base(author: String?, year yearValue: String?, title: String) -> String {
-        let family = author.flatMap { words($0).last }.map(capitalized) ?? "Anon"
+        let family = author.flatMap(family) ?? "Anon"
         let titleWord = words(title)
             .first { $0.count > 1 && !stopwords.contains($0.lowercased()) }
             .map(capitalized) ?? ""
@@ -182,6 +201,34 @@ extension EditionKey {
             taken.insert(key)
         }
         return pending.count
+    }
+}
+
+extension EditionKey {
+    /// Recalcule les clés **provisoires** des éditions d'une œuvre dont la
+    /// fiche vient d'être corrigée. Les clés figées ou manuelles ne bougent pas.
+    public static func refreshProvisional(forWork workId: UUID, _ db: Database) throws {
+        try db.execute(sql: """
+            DELETE FROM edition_key
+            WHERE origin = 'generated' AND editionId IN (SELECT id FROM edition WHERE workId = ?)
+            """, arguments: [workId])
+        try assignMissing(db)
+    }
+
+    /// Fige les clés provisoires (toutes, ou celles des éditions données) :
+    /// à appeler au moment où elles sortent vers un outil de citation.
+    @discardableResult
+    public static func stabilize(_ db: Database, editionIds: [UUID]? = nil) throws -> Int {
+        if let editionIds {
+            for id in editionIds {
+                try db.execute(sql: """
+                    UPDATE edition_key SET origin = 'stable' WHERE origin = 'generated' AND editionId = ?
+                    """, arguments: [id])
+            }
+        } else {
+            try db.execute(sql: "UPDATE edition_key SET origin = 'stable' WHERE origin = 'generated'")
+        }
+        return db.changesCount
     }
 }
 
