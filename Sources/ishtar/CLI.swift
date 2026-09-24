@@ -12,7 +12,8 @@ struct IshtarCLI: AsyncParsableCommand {
         abstract: "Ishtar — le moteur de bibliothèque savante. / The scholarly library engine.",
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
-                      Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self]
+                      Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
+                      Keys.self, Publish.self]
     )
 }
 
@@ -406,5 +407,81 @@ struct ImportZotero: AsyncParsableCommand {
             print(String(repeating: "─", count: 60))
             print("Mode simulation. Utilisez --apply pour écrire les collections.")
         }
+    }
+}
+
+// MARK: - Clés de citation et publication (lots F2, F3)
+
+struct Keys: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Attribue une clé de citation à chaque édition qui n'en a pas (les clés existantes ne changent jamais)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Affiche toutes les clés après attribution.")
+    var list = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let assigned = try await CatalogStore(db: database).assignMissingKeys()
+        print("Clés attribuées : \(assigned)")
+        if list {
+            let keys = try await database.pool.read {
+                try String.fetchAll($0, sql: "SELECT key FROM edition_key ORDER BY key COLLATE NOCASE")
+            }
+            keys.forEach { print($0) }
+        }
+    }
+}
+
+struct Publish: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Publie le catalogue : catalogue.json, couvertures et base réduite, lisibles sans Ishtar."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Racine de la bibliothèque (les chemins publiés lui sont relatifs).")
+    var root: String
+
+    @Option(name: .long, help: "Dossier de publication.", transform: URL.init(fileURLWithPath:))
+    var out: URL
+
+    @Option(name: .long, help: "Dossier des vignettes d'Ishtar (<sha256>.png), copiées comme couvertures.",
+            transform: URL.init(fileURLWithPath:))
+    var covers: URL?
+
+    @Option(name: .long, help: "Dossier (relatif à la racine) à ne jamais publier. Répétable.")
+    var exclude: [String] = []
+
+    @Option(name: .long, help: "Préfixe de titre à ne pas publier. Répétable.")
+    var excludeTitlePrefix: [String] = []
+
+    @Flag(name: .long, help: "Construit et résume sans rien écrire.")
+    var dryRun = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        // Un catalogue antérieur à la v7 n'a pas encore de clés.
+        try await CatalogStore(db: database).assignMissingKeys()
+        let rules = PublicationRules(excludedFolders: exclude, excludedTitlePrefixes: excludeTitlePrefix)
+        let publisher = CatalogPublisher(db: database)
+
+        let report: PublicationReport
+        if dryRun {
+            report = try await publisher.build(root: root, rules: rules).1
+        } else {
+            report = try await publisher.publish(root: root, rules: rules, to: out, coversFolder: covers)
+        }
+        print(dryRun ? "Publication (essai à blanc)" : "Publié dans \(out.path)")
+        print(String(repeating: "─", count: 60))
+        print("Éditions publiées        \(report.editions)")
+        print("Fichiers                 \(report.files)")
+        print("Couvertures              \(report.covers)")
+        print("Écartés par les règles   \(report.excludedByRule)")
+        print("Introuvables ou ignorés  \(report.excludedMissingOrIgnored)")
     }
 }
