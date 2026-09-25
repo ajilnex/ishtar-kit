@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import GRDB
 import IshtarCatalog
 import IshtarIngest
 import IshtarSearch
@@ -13,7 +14,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self, Doublons.self]
     )
 }
 
@@ -1030,5 +1031,79 @@ struct Prenoms: AsyncParsableCommand {
         print("Prénoms retrouvés : \(list.count)")
         for n in list { print("\(n.current)  →  \(n.name)   — \(n.evidence)") }
         if appliquer { try await GivenNamePass.apply(list, to: database); print("Appliqué.") }
+    }
+}
+
+// MARK: - Doublons d'un même fonds
+
+struct Doublons: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Deux fichiers de même format pour une même édition : garde l'annoté (sinon le plus gros), range les autres dans _NON_BIBLIO/_doublons (journal défaisable)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Racine de la bibliothèque.")
+    var racine: String
+
+    @Option(name: .long, help: "Dossier laissé tel quel (répétable).")
+    var exclure: [String] = []
+
+    @Flag(name: .long, help: "Déplace (sinon : seulement montrer).")
+    var appliquer = false
+
+    /// Annotations d'un PDF faites par un lecteur (surlignages, notes), hors liens et champs.
+    static func annotations(_ path: String) -> Int {
+        guard path.lowercased().hasSuffix(".pdf"), let doc = PDFDocument(url: URL(fileURLWithPath: path)) else { return 0 }
+        var n = 0
+        for i in 0..<min(doc.pageCount, 2000) {
+            n += doc.page(at: i)?.annotations.filter { !["Link", "Widget"].contains($0.type ?? "") }.count ?? 0
+        }
+        return n
+    }
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let store = CatalogStore(db: database)
+        let root = URL(fileURLWithPath: racine).standardizedFileURL.path
+        let rows = try await database.pool.read { conn in
+            try Row.fetchAll(conn, sql: """
+                SELECT d.id AS id, d.editionId AS editionId, d.filePath AS path, d.format AS format, d.fileSize AS size
+                FROM document d WHERE d.isMissing = 0 AND d.editionId IS NOT NULL
+                """)
+        }
+        var groups: [String: [(id: UUID, path: String, size: Int)]] = [:]
+        for r in rows {
+            let path: String = r["path"]
+            guard path.hasPrefix(root + "/") else { continue }
+            let rel = String(path.dropFirst(root.count + 1))
+            if rel.split(separator: "/").dropLast().contains(where: { exclure.contains(String($0)) }) { continue }
+            let key = "\(r["editionId"] as UUID)|\(r["format"] as String)"
+            groups[key, default: []].append((r["id"], path, r["size"]))
+        }
+        var moved = 0
+        for (_, files) in groups.sorted(by: { $0.key < $1.key }) where files.count > 1 {
+            let ranked = files.map { f in (f, Self.annotations(f.path)) }
+                .sorted { ($0.1, $0.0.size) > ($1.1, $1.0.size) }
+            let kept = ranked[0]
+            print("garde  \((kept.0.path as NSString).lastPathComponent)\(kept.1 > 0 ? "  (\(kept.1) annotations)" : "")")
+            for (f, notes) in ranked.dropFirst() {
+                print("  range \((f.path as NSString).lastPathComponent)\(notes > 0 ? "  (\(notes) annotations — gardé aussi)" : "")")
+                // Un exemplaire annoté n'est jamais écarté, même s'il y en a un autre plus annoté.
+                guard appliquer, notes == 0 else { continue }
+                let dest = ((root as NSString).appendingPathComponent("_NON_BIBLIO/_doublons") as NSString)
+                    .appendingPathComponent((f.path as NSString).lastPathComponent)
+                try FileManager.default.createDirectory(atPath: (dest as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                let move = Renaming(documentId: f.id, from: f.path, to: dest)
+                if try await store.perform(move) {
+                    let journal = "\(NSHomeDirectory())/Library/Logs/ishtar-ranger.tsv"
+                    let h = try FileHandle(forWritingTo: URL(fileURLWithPath: journal))
+                    try h.seekToEnd(); try h.write(contentsOf: Data("\(move.documentId.uuidString)\t\(move.from)\t\(move.to)\n".utf8)); try h.close()
+                    moved += 1
+                }
+            }
+        }
+        if appliquer { print("\(moved) doublons rangés dans _NON_BIBLIO/_doublons.") }
     }
 }
