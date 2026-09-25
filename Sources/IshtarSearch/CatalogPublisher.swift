@@ -41,6 +41,9 @@ public struct PublishedEdition: Codable, Sendable, Equatable {
     public var people: [PublishedPerson]?
     /// « livre » ou « article » (chapitres et communications compris).
     public var kind: String?
+    /// L'œuvre dont l'édition relève : les éditions et formats d'une même
+    /// œuvre ne font qu'une carte dans Rayons.
+    public var work: String?
     /// Année de l'œuvre.
     public var year: String?
     /// Année de cette édition, quand elle diffère de celle de l'œuvre.
@@ -216,6 +219,7 @@ public struct CatalogPublisher: Sendable {
                 authors: row.authors,
                 people: people[row.work.id].flatMap { $0.isEmpty ? nil : $0 },
                 kind: (kinds[document.id] ?? .livre).rawValue,
+                work: row.work.id.uuidString,
                 year: workYear ?? edition.year,
                 editionYear: (workYear != nil && edition.year != workYear) ? edition.year : nil,
                 publisher: edition.publisher,

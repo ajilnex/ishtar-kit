@@ -19,7 +19,14 @@ public enum FileLabel {
         if let sortName, let family = sortName.components(separatedBy: ",").first, !family.isEmpty {
             return family.trimmingCharacters(in: .whitespaces)
         }
-        return name.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? name
+        // Une particule en capitale fait partie du nom (« André De Tienne »,
+        // « Ursula K. Le Guin ») ; en minuscule, non (« Michel de Montaigne »).
+        let words = name.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let last = words.last else { return name }
+        if words.count >= 3, ["De", "Van", "Le", "La", "Du", "Di", "Da", "Del", "Des", "Von", "Ten", "Ter"].contains(words[words.count - 2]) {
+            return words[words.count - 2] + " " + last
+        }
+        return last
     }
 
     static func authorPart(_ families: [String]) -> String {
@@ -126,11 +133,16 @@ extension CatalogStore {
                 var copy = 1
                 var target = FileLabel.name(families: families, title: title, year: workYear, editionYear: editionYear, ext: ext)
                 guard target != current.precomposedStringWithCanonicalMapping else { continue }
+                // Son propre nom n'est pas « pris » : sinon « X [2] » fuirait vers « X [3] ».
+                taken[dir, default: []].remove(current.lowercased())
                 while taken[dir, default: []].contains(target.lowercased()) {
                     copy += 1
                     target = FileLabel.name(families: families, title: title, year: workYear, editionYear: editionYear, ext: ext, copy: copy)
                 }
-                taken[dir, default: []].remove(current.lowercased())
+                // Le numéro de copie retombe sur le nom actuel : rien à faire.
+                if target == current.precomposedStringWithCanonicalMapping {
+                    taken[dir, default: []].insert(current.lowercased()); continue
+                }
                 taken[dir, default: []].insert(target.lowercased())
                 plan.append(Renaming(documentId: row["id"], from: path, to: (dir as NSString).appendingPathComponent(target),
                                      verified: (row["confidence"] as String) == "high"))

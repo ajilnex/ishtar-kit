@@ -13,7 +13,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self]
     )
 }
 
@@ -1008,5 +1008,27 @@ struct Titres: AsyncParsableCommand {
         print("Titres rendus à leur graphie : \(list.count)")
         for r in list { print("\(r.current)  →  \(r.restored)") }
         if appliquer { print("Appliqué à \(try await TitlePass.apply(list, to: database)) œuvres.") }
+    }
+}
+
+// MARK: - Prénoms (Sudoc)
+
+struct Prenoms: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Rend leur prénom aux auteurs réduits à leur nom, d'après la notice Sudoc d'un de leurs livres. Réseau."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Flag(name: .long, help: "Écrit (sinon : seulement montrer).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let list = try await GivenNamePass.proposals(in: database)
+        print("Prénoms retrouvés : \(list.count)")
+        for n in list { print("\(n.current)  →  \(n.name)   — \(n.evidence)") }
+        if appliquer { try await GivenNamePass.apply(list, to: database); print("Appliqué.") }
     }
 }
