@@ -132,6 +132,51 @@ public struct CatalogPublisher: Sendable {
         self.db = db
     }
 
+    /// `corpus/annotations.json` : `{ annotations: [...], encres: [...] }`,
+    /// triés, sans date de génération (identique d'une publication à l'autre
+    /// tant que rien ne change). Seuls les documents publiés y figurent.
+    static func annotationsJSON(db: CatalogDatabase, hashes: Set<String>) async throws -> Data {
+        try await db.pool.read { conn in
+            let rows = try Row.fetchAll(conn, sql: """
+                SELECT a.id AS id, d.contentHash AS sha, a.pageNumber AS page, a.cfi AS cfi, a.quote AS quote,
+                       a.prefix AS prefix, a.suffix AS suffix, a.note AS note, a.color AS color,
+                       a.dateCreated AS created
+                FROM annotation a JOIN document d ON d.id = a.documentId
+                WHERE d.contentHash IS NOT NULL AND d.isMissing = 0
+                ORDER BY d.contentHash, a.pageNumber, a.dateCreated, a.id
+                """)
+            var kept = Set<String>()
+            var notes: [[String: Any]] = []
+            for r in rows {
+                let sha: String = r["sha"]
+                guard hashes.contains(sha) else { continue }
+                let id = (r["id"] as UUID).uuidString
+                kept.insert(id)
+                var n: [String: Any] = ["id": id, "sha256": sha, "citation": r["quote"] as String]
+                if let v: Int = r["page"] { n["page"] = v }
+                for (k, col) in [("cfi", "cfi"), ("avant", "prefix"), ("apres", "suffix"), ("note", "note"), ("couleur", "color")] {
+                    if let v: String = r[col], !v.isEmpty { n[k] = v }
+                }
+                if let d: Date = r["created"] { n["date"] = ISO8601DateFormatter().string(from: d) }
+                notes.append(n)
+            }
+            let linkRows = try Row.fetchAll(conn, sql: """
+                SELECT sourceAnnotationId AS de, targetAnnotationId AS vers, kind, note, color FROM link
+                ORDER BY dateCreated, id
+                """)
+            var links: [[String: Any]] = []
+            for r in linkRows {
+                let de = (r["de"] as UUID).uuidString, vers = (r["vers"] as UUID).uuidString
+                guard kept.contains(de), kept.contains(vers) else { continue }
+                var l: [String: Any] = ["de": de, "vers": vers]
+                for k in ["kind", "note", "color"] { if let v: String = r[k], !v.isEmpty { l[k == "kind" ? "nature" : k == "color" ? "couleur" : k] = v } }
+                links.append(l)
+            }
+            return try JSONSerialization.data(withJSONObject: ["annotations": notes, "encres": links],
+                                              options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        }
+    }
+
     /// Construit le catalogue publié, sans rien écrire. Pur à base donnée.
     ///
     /// Un document n'est publié que s'il est présent, non ignoré, pourvu d'une
@@ -327,6 +372,16 @@ public struct CatalogPublisher: Sendable {
                 try? fm.removeItem(at: corpusOut.appendingPathComponent(entry))
             }
             report.corpusWritten = written
+
+            // Les annotations (surlignements, notes, encres) des documents
+            // publiés, rattachées à l'empreinte du fichier et à la page : la
+            // lecture d'Aubin, pour les modèles (Bibliothécaire, droit
+            // réservé). Réécrites seulement si elles changent.
+            let annotations = try await Self.annotationsJSON(db: db, hashes: wantedHashes)
+            let target = corpusOut.appendingPathComponent("annotations.json")
+            if (try? Data(contentsOf: target)) != annotations {
+                try annotations.write(to: target, options: .atomic)
+            }
         }
 
         // 2. Couvertures : ajout des manquantes, retrait des orphelines.

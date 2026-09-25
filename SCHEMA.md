@@ -200,6 +200,14 @@ instantané lisible sans Ishtar :
 - `covers/<sha256>.png` — les vignettes d'Ishtar, par empreinte de fichier.
 - `catalog.sqlite` — copie de ce schéma **réduite aux documents publiés**
   (textes extraits compris) ; les conversations du démon en sont retirées.
+- `corpus/` (avec `--corpus`, la face cachée pour les modèles, 25/09) :
+  `<sha256>.pages.deflate` (texte extrait, DEFLATE brut, pages séparées par
+  U+000C) et `annotations.json` — `{ annotations: [{ id, sha256, page?, cfi?,
+  citation, avant?, apres?, note?, couleur?, date }], encres: [{ de, vers,
+  nature?, note?, couleur? }] }`, triés, seulement pour les documents publiés
+  (une encre dont un bout n'est pas publié ne sort pas). Jamais servi par
+  Rayons ; le Bibliothécaire le réserve au droit Portier
+  `bibliothecaire:annotations`.
 
 Ne sont jamais publiés : les documents introuvables ou ignorés, ceux sans
 empreinte, ceux hors de la racine, et ce qu'excluent les règles de

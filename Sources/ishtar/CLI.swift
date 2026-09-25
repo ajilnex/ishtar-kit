@@ -14,7 +14,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self, Doublons.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self, Doublons.self, Exporter.self, Annotations.self]
     )
 }
 
@@ -1110,5 +1110,98 @@ struct Doublons: AsyncParsableCommand {
             }
         }
         if appliquer { print("\(moved) doublons rangés dans _NON_BIBLIO/_doublons.") }
+    }
+}
+
+// MARK: - Annotations des PDF
+
+struct Annotations: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Recense les annotations déjà présentes dans les PDF (Aperçu, Skim, Adobe…) et, avec --appliquer, les importe en surlignements ancrés par le texte. Idempotent ; les fichiers ne sont jamais modifiés."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Racine de la bibliothèque (seuls ses fichiers sont lus).")
+    var racine: String
+
+    @Option(name: .long, help: "Dossier laissé tel quel (répétable).")
+    var exclure: [String] = ["_NON_BIBLIO"]
+
+    @Flag(name: .long, help: "Importe (sinon : seulement compter).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let root = URL(fileURLWithPath: racine).standardizedFileURL.path
+        let rows = try await database.pool.read { conn in
+            try Row.fetchAll(conn, sql: """
+                SELECT d.id AS id, d.filePath AS path FROM document d
+                WHERE d.isMissing = 0 AND d.format = 'pdf' ORDER BY d.filePath
+                """)
+        }
+        let importer = PDFAnnotationImporter()
+        var documents = 0, found = 0, added = 0
+        for r in rows {
+            let path: String = r["path"]
+            guard path.hasPrefix(root + "/") else { continue }
+            let rel = String(path.dropFirst(root.count + 1))
+            if rel.split(separator: "/").dropLast().contains(where: { exclure.contains(String($0)) }) { continue }
+            let id: UUID = r["id"]
+            let candidates = importer.annotations(fromPDFAt: path, documentId: id)
+            guard !candidates.isEmpty else { continue }
+            documents += 1
+            found += candidates.count
+            let notes = candidates.filter { !($0.note ?? "").isEmpty }.count
+            var line = "\(candidates.count)\t\(notes) note(s)\t\(rel)"
+            if appliquer {
+                let n = try await importer.importAnnotations(fromPDFAt: path, documentId: id, into: database)
+                added += n
+                line += "\t+\(n)"
+            }
+            print(line)
+        }
+        print("\(found) annotation(s) dans \(documents) PDF\(appliquer ? " ; \(added) importée(s)" : " (simulation : --appliquer pour importer)").")
+    }
+}
+
+// MARK: - Exporter les références (Zotero, Athanor)
+
+struct Exporter: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Exporte les références publiées (BibTeX/biblatex et CSL-JSON, clés d'Ishtar). --figer fige les clés exportées."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Racine de la bibliothèque.")
+    var root: String
+
+    @Option(name: .long, help: "Dossier où écrire bibliotheque.bib et bibliotheque.csl.json.", transform: URL.init(fileURLWithPath:))
+    var out: URL
+
+    @Option(name: .long, help: "Dossier à ne jamais exporter. Répétable.")
+    var exclude: [String] = []
+
+    @Option(name: .long, help: "Préfixe de titre à ne pas exporter. Répétable.")
+    var excludeTitlePrefix: [String] = []
+
+    @Flag(name: .long, help: "Fige les clés exportées : elles ne changeront plus d'elles-mêmes (à faire au moment d'importer dans Zotero).")
+    var figer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let rules = PublicationRules(excludedFolders: exclude, excludedTitlePrefixes: excludeTitlePrefix)
+        let (catalogue, _) = try await CatalogPublisher(db: database).build(root: root, rules: rules)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try Data(BibliographyExport.bibtex(catalogue).utf8).write(to: out.appendingPathComponent("bibliotheque.bib"), options: .atomic)
+        try BibliographyExport.cslJSON(catalogue).write(to: out.appendingPathComponent("bibliotheque.csl.json"), options: .atomic)
+        print("Références exportées : \(catalogue.editions.count) → \(out.path)")
+        if figer {
+            let n = try await CatalogStore(db: database).stabilizeKeys(catalogue.editions.map { $0.key })
+            print("Clés figées : \(n)")
+        }
     }
 }

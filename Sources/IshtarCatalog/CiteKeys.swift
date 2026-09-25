@@ -338,6 +338,20 @@ extension CatalogStore {
         }
     }
 
+    /// Fige les clés données (elles sortent vers un outil de citation) : dès
+    /// lors, aucune passe ne les change plus. Rend le nombre de clés figées.
+    @discardableResult
+    public func stabilizeKeys(_ keys: [String]) async throws -> Int {
+        try await db.pool.write { conn in
+            var n = 0
+            for key in keys {
+                try conn.execute(sql: "UPDATE edition_key SET origin = 'stable' WHERE origin = 'generated' AND key = ?", arguments: [key])
+                n += conn.changesCount
+            }
+            return n
+        }
+    }
+
     /// La clé d'une édition, si elle en a une.
     public func key(forEdition editionId: UUID) async throws -> EditionKey? {
         try await db.pool.read { try EditionKey.fetchOne($0, key: editionId) }

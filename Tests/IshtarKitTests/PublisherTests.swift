@@ -105,4 +105,33 @@ struct PublisherTests {
         #expect(again.editions == report.editions)
         #expect(try fm.attributesOfItem(atPath: out.appendingPathComponent("catalogue.json").path)[.modificationDate] as? Date == date)
     }
+
+    @Test("Face cachée : annotations et encres des seuls documents publiés, stables d'une publication à l'autre")
+    func annotations() async throws {
+        let db = try await seeded()
+        let (publie, prive) = try await db.pool.read { conn in
+            (try UUID.fetchOne(conn, sql: "SELECT id FROM document WHERE contentHash = 'aaa' AND filePath LIKE '%Minima.pdf'")!,
+             try UUID.fetchOne(conn, sql: "SELECT id FROM document WHERE contentHash = 'bbb'")!)
+        }
+        let a = Annotation(documentId: publie, pageNumber: 12, quote: "La vie ne vit pas", suffix: ".", note: "clé", color: "jaune")
+        let b = Annotation(documentId: publie, pageNumber: 40, quote: "Il n'est pas de vraie vie")
+        let c = Annotation(documentId: prive, pageNumber: 1, quote: "journal")
+        try await db.pool.write { conn in
+            try a.insert(conn); try b.insert(conn); try c.insert(conn)
+            try Link(kind: "reprise", sourceAnnotationId: a.id, targetAnnotationId: b.id).insert(conn)
+            try Link(kind: "privé", sourceAnnotationId: a.id, targetAnnotationId: c.id).insert(conn)
+        }
+        let json = try await CatalogPublisher.annotationsJSON(db: db, hashes: ["aaa"])
+        let objet = try #require(try JSONSerialization.jsonObject(with: json) as? [String: Any])
+        let notes = try #require(objet["annotations"] as? [[String: Any]])
+        #expect(notes.map { $0["citation"] as? String } == ["La vie ne vit pas", "Il n'est pas de vraie vie"])
+        #expect(notes[0]["sha256"] as? String == "aaa")
+        #expect(notes[0]["page"] as? Int == 12)
+        #expect(notes[0]["note"] as? String == "clé")
+        #expect(notes[0]["apres"] as? String == ".")
+        let encres = try #require(objet["encres"] as? [[String: Any]])
+        #expect(encres.count == 1, "une encre vers un document non publié ne sort pas")
+        #expect(encres.first?["nature"] as? String == "reprise")
+        #expect(try await CatalogPublisher.annotationsJSON(db: db, hashes: ["aaa"]) == json)
+    }
 }
