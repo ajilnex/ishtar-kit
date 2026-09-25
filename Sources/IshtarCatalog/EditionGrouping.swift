@@ -233,7 +233,10 @@ public enum EditionGrouping {
                 // Le texte témoigne : chaque membre qui a un texte doit nommer
                 // l'auteur dans ses premières pages (« The Legacy of Kant » de
                 // Gironi n'est pas l'article de Stovall rangé sous son nom).
-                for m in members {
+                // Témoin exigé seulement quand les années diffèrent : à titre,
+                // auteur et année identiques (EPUB et MOBI du même livre), sûr.
+                let years = Set(members.map { CiteKeyGenerator.year($0["year"]) ?? "?" })
+                for m in members where years.count > 1 {
                     guard let opening: String = m["opening"], opening.count >= 300,
                           let author: String = m["author"], let family = CiteKeyGenerator.family(author)?.lowercased()
                     else { continue }
