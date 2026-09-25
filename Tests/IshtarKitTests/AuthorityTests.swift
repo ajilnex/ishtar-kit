@@ -252,6 +252,28 @@ struct DocumentKindTests {
         #expect(DocumentKind.classify(format: .pdf, pages: 341, opening: "Oxford University Press, ISBN") == .livre)
         #expect(DocumentKind.classify(format: .pdf, pages: 90, opening: "Table des matières. Éditions du Seuil. ISBN 978") == .livre)
     }
+
+    @Test("Le catalogue entier : le même genre pour la publication et l'application")
+    func catalogue() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let (article, livre, absent) = try await db.pool.write { conn -> (UUID, UUID, UUID) in
+            func document(_ format: DocumentFormat, missing: Bool = false) throws -> UUID {
+                let work = Work(title: "T"); try work.insert(conn)
+                let edition = Edition(workId: work.id); try edition.insert(conn)
+                let d = Document(editionId: edition.id, filePath: "/lib/\(UUID()).\(format.rawValue)", originalFileName: "x",
+                                 fileSize: 1, contentHash: UUID().uuidString, format: format, isMissing: missing)
+                try d.insert(conn)
+                return d.id
+            }
+            let a = try document(.pdf)
+            for n in 1...20 { try DocumentPage(documentId: a, pageNumber: n, content: n == 1 ? "Philosophical Studies, Vol. 39, pp. 325-345, JSTOR" : "texte").insert(conn) }
+            return (a, try document(.epub), try document(.pdf, missing: true))
+        }
+        let kinds = try await DocumentKind.kinds(in: db)
+        #expect(kinds[article] == .article)
+        #expect(kinds[livre] == .livre)
+        #expect(kinds[absent] == nil, "un document introuvable n'a pas de genre")
+    }
 }
 
 @Suite("Noms : particules, crochets, dates en tête")

@@ -188,18 +188,8 @@ public struct CatalogPublisher: Sendable {
         let rows = try await LibraryOverview(db: db).rows()
 
         let (keys, collectionPaths, people, kinds) = try await db.pool.read { conn -> ([UUID: String], [UUID: [String]], [UUID: [PublishedPerson]], [UUID: DocumentKind]) in
-            // Le genre de chaque document : format, nombre de pages, marques des premières pages.
-            var kinds: [UUID: DocumentKind] = [:]
-            for row in try Row.fetchAll(conn, sql: """
-                SELECT d.id AS id, d.format AS format,
-                       (SELECT count(*) FROM document_page p WHERE p.documentId = d.id) AS pages,
-                       (SELECT group_concat(substr(content, 1, 2500), ' ') FROM (SELECT content FROM document_page p
-                          WHERE p.documentId = d.id AND p.pageNumber BETWEEN 1 AND 4 ORDER BY p.pageNumber)) AS opening
-                FROM document d WHERE d.isMissing = 0
-                """) {
-                guard let format = DocumentFormat(rawValue: row["format"]) else { continue }
-                kinds[row["id"]] = DocumentKind.classify(format: format, pages: row["pages"], opening: row["opening"] ?? "")
-            }
+            // Le genre de chaque document (partagé avec l'application).
+            let kinds = try DocumentKind.kinds(conn)
             var keys: [UUID: String] = [:]
             for key in try EditionKey.fetchAll(conn) { keys[key.editionId] = key.key }
             var links: [UUID: [String: String]] = [:]

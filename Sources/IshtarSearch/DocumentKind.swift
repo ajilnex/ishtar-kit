@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import IshtarCatalog
 
 /// Livre ou article : les deux rayons d'une bibliothèque de recherche
@@ -18,6 +19,28 @@ public enum DocumentKind: String, Codable, Sendable {
         "all rights reserved", "achevé d'imprimer", "dépôt légal", "printed in", "presses universitaires",
         "university press", "éditions", "editions", "library of congress", "british library"
     ]
+
+    /// Le genre de chaque document présent du catalogue — le même calcul pour
+    /// la publication (Rayons) et pour l'application (sections Livres /
+    /// Articles) : format, nombre de pages, marques des premières pages.
+    public static func kinds(in db: CatalogDatabase) async throws -> [UUID: DocumentKind] {
+        try await db.pool.read { conn in try kinds(conn) }
+    }
+
+    static func kinds(_ conn: Database) throws -> [UUID: DocumentKind] {
+        var kinds: [UUID: DocumentKind] = [:]
+        for row in try Row.fetchAll(conn, sql: """
+            SELECT d.id AS id, d.format AS format,
+                   (SELECT count(*) FROM document_page p WHERE p.documentId = d.id) AS pages,
+                   (SELECT group_concat(substr(content, 1, 2500), ' ') FROM (SELECT content FROM document_page p
+                      WHERE p.documentId = d.id AND p.pageNumber BETWEEN 1 AND 4 ORDER BY p.pageNumber)) AS opening
+            FROM document d WHERE d.isMissing = 0
+            """) {
+            guard let format = DocumentFormat(rawValue: row["format"]) else { continue }
+            kinds[row["id"]] = classify(format: format, pages: row["pages"], opening: row["opening"] ?? "")
+        }
+        return kinds
+    }
 
     /// Le genre d'un document (pur). `pages` : pages extraites ; `opening` :
     /// le texte des premières pages.
