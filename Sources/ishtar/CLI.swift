@@ -477,6 +477,9 @@ struct Publish: AsyncParsableCommand {
     @Flag(name: .long, help: "Fabrique les couvertures absentes du dossier de vignettes (QuickLook, 1re page).")
     var renderCovers = false
 
+    @Flag(name: .long, help: "Publie le corpus pour les modèles de langage (corpus/<sha256>.pages.deflate).")
+    var corpus = false
+
     @Flag(name: .long, help: "Joint la base réduite (textes intégraux, volumineuse).")
     var withDatabase = false
 
@@ -498,7 +501,8 @@ struct Publish: AsyncParsableCommand {
             let render: (@Sendable (URL) async -> Data?)? = renderCovers
                 ? { @Sendable url in await CoverRenderer.png(for: url, strictness: 0.5) } : nil
             report = try await publisher.publish(root: root, rules: rules, to: out, coversFolder: covers,
-                                                 includeDatabase: withDatabase, fonds: provenance, renderCover: render)
+                                                 includeDatabase: withDatabase, includeCorpus: corpus,
+                                                 fonds: provenance, renderCover: render)
         }
         print(dryRun ? "Publication (essai à blanc)"
               : report.unchanged ? "Rien de changé : \(out.path) est à jour" : "Publié dans \(out.path)")
@@ -506,6 +510,7 @@ struct Publish: AsyncParsableCommand {
         print("Éditions publiées        \(report.editions)")
         print("Fichiers                 \(report.files)")
         print("Couvertures              \(report.covers)")
+        if corpus { print("Corpus (écrits)          \(report.corpusWritten)") }
         print("Écartés par les règles   \(report.excludedByRule)")
         print("Introuvables ou ignorés  \(report.excludedMissingOrIgnored)")
     }

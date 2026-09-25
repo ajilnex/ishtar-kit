@@ -121,6 +121,8 @@ public struct PublicationReport: Sendable, Equatable {
     /// Vrai si le manifeste existant disait déjà la même chose : il n'a pas
     /// été réécrit (rien à transporter, rien à recharger côté serveur).
     public var unchanged = false
+    /// Fichiers du corpus (face cachée) écrits ou réécrits.
+    public var corpusWritten = 0
 }
 
 public struct CatalogPublisher: Sendable {
@@ -263,7 +265,8 @@ public struct CatalogPublisher: Sendable {
     /// intégraux, lourde à transporter ; seulement quand un outil en a besoin.
     @discardableResult
     public func publish(root: String, rules: PublicationRules, to outputFolder: URL,
-                        coversFolder: URL? = nil, includeDatabase: Bool = false, fonds: PublishedFonds? = nil,
+                        coversFolder: URL? = nil, includeDatabase: Bool = false, includeCorpus: Bool = false,
+                        fonds: PublishedFonds? = nil,
                         renderCover: (@Sendable (URL) async -> Data?)? = nil,
                         now: Date = Date()) async throws -> PublicationReport {
         let fm = FileManager.default
@@ -288,6 +291,42 @@ public struct CatalogPublisher: Sendable {
             }
         } else {
             try? fm.removeItem(at: sqliteTarget)
+        }
+
+        // 1 bis. La face cachée, pour les modèles de langage (décision d'Aubin,
+        // 25/09) : `corpus/<sha256>.pages.deflate`, le texte extrait de chaque
+        // document publié, pages séparées par un saut de page (U+000C), page 1
+        // d'abord, compressé en DEFLATE brut. Un fichier par document : le
+        // transport ne déplace que ce qui a changé ; rien n'est réécrit à
+        // l'identique ; les orphelins s'en vont.
+        if includeCorpus {
+            let corpusOut = outputFolder.appendingPathComponent("corpus", isDirectory: true)
+            try fm.createDirectory(at: corpusOut, withIntermediateDirectories: true)
+            let wantedHashes = Set(catalogue.editions.flatMap { $0.files.map(\.sha256) })
+            var written = 0
+            for hash in wantedHashes.sorted() {
+                let pages: [(Int, String)] = try await db.pool.read { conn in
+                    try Row.fetchAll(conn, sql: """
+                        SELECT p.pageNumber AS n, p.content AS text FROM document_page p
+                        WHERE p.documentId = (SELECT id FROM document WHERE contentHash = ? AND isMissing = 0 LIMIT 1)
+                        ORDER BY p.pageNumber
+                        """, arguments: [hash]).map { ($0["n"], $0["text"]) }
+                }
+                guard let last = pages.last?.0, last >= 1 else { continue }
+                var byNumber: [Int: String] = [:]
+                for (n, t) in pages { byNumber[n] = t.replacingOccurrences(of: "\u{0C}", with: " ") }
+                let text = (1...last).map { byNumber[$0] ?? "" }.joined(separator: "\u{0C}")
+                guard let packed = try? (Data(text.utf8) as NSData).compressed(using: .zlib) as Data else { continue }
+                let target = corpusOut.appendingPathComponent("\(hash).pages.deflate")
+                if let existing = try? Data(contentsOf: target), existing == packed { continue }
+                try packed.write(to: target, options: .atomic)
+                written += 1
+            }
+            for entry in (try? fm.contentsOfDirectory(atPath: corpusOut.path)) ?? []
+            where entry.hasSuffix(".pages.deflate") && !wantedHashes.contains(String(entry.dropLast(".pages.deflate".count))) {
+                try? fm.removeItem(at: corpusOut.appendingPathComponent(entry))
+            }
+            report.corpusWritten = written
         }
 
         // 2. Couvertures : ajout des manquantes, retrait des orphelines.
