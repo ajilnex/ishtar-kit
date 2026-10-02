@@ -14,7 +14,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self, Doublons.self, Exporter.self, Annotations.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Reunir.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self, Doublons.self, Exporter.self, Annotations.self]
     )
 }
 
@@ -746,6 +746,43 @@ struct Traductions: AsyncParsableCommand {
 }
 
 // MARK: - Ranger (bibliothèque confiée)
+
+struct Reunir: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Réunit sous une même œuvre, sur pièce, un original et ses traductions possédés (la première clé désigne l'original)."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Ce qui prouve que c'est la même œuvre (page de titre, mentions de copyright).")
+    var preuve: String
+
+    @Flag(name: .long, help: "Écrit la réunion (sinon : seulement la montrer).")
+    var appliquer = false
+
+    @Argument(help: "Les clés des éditions à réunir, l'original d'abord.")
+    var cles: [String]
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        for cle in cles {
+            let row = try await database.pool.read { conn in
+                try Row.fetchOne(conn, sql: """
+                    SELECT w.title AS t, e.title AS et, e.language AS l, e.year AS y FROM edition_key k
+                    JOIN edition e ON e.id = k.editionId JOIN work w ON w.id = e.workId WHERE k.key = ? COLLATE NOCASE
+                    """, arguments: [cle])
+            }
+            guard let row else { print("clé inconnue : \(cle)"); throw ExitCode.failure }
+            let titre: String = (row["et"] as String?) ?? row["t"]
+            print("\(cle) — \(titre) (\((row["l"] as String?) ?? "?"), \((row["y"] as String?) ?? "s.d."))")
+        }
+        guard appliquer else { print("Essai à blanc : rien d'écrit (ajouter --appliquer)."); return }
+        let day = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
+        let n = try await TranslationPass.reunir(keys: cles, preuve: preuve, date: day, in: database)
+        print("\(n) œuvre(s) réunie(s) à « \(cles[0]) ».")
+    }
+}
 
 struct Ranger: AsyncParsableCommand {
     static let configuration = CommandConfiguration(

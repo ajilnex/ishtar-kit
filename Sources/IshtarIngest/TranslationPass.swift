@@ -77,6 +77,70 @@ public enum TranslationPass {
         return groups
     }
 
+    public enum ReunionError: Error, CustomStringConvertible {
+        case unknownKey(String)
+        case tooFew
+        public var description: String {
+            switch self {
+            case let .unknownKey(key): return "Clé inconnue : \(key)"
+            case .tooFew: return "Il faut au moins deux clés, l'original d'abord."
+            }
+        }
+    }
+
+    /// Réunit à la main, sur pièce, des livres possédés qui sont la même œuvre
+    /// (un original et ses traductions). La première clé désigne l'original :
+    /// son œuvre est gardée, avec son titre et sa date ; chaque édition garde
+    /// le titre sous lequel elle a paru. Contrairement à la passe Wikidata, une
+    /// fiche vérifiée peut être réunie : c'est une décision humaine, dont la
+    /// preuve rejoint les notes de l'œuvre. Les clés ne changent pas (une clé
+    /// provisoire suit sa fiche). Rend le nombre d'œuvres absorbées.
+    @discardableResult
+    public static func reunir(keys: [String], preuve: String, date: String, in db: CatalogDatabase) async throws -> Int {
+        guard keys.count >= 2 else { throw ReunionError.tooFew }
+        return try await db.pool.write { conn in
+            var works: [UUID] = []
+            for key in keys {
+                guard let row = try Row.fetchOne(conn, sql: """
+                    SELECT e.workId AS w FROM edition_key k JOIN edition e ON e.id = k.editionId WHERE k.key = ? COLLATE NOCASE
+                    """, arguments: [key]) else { throw ReunionError.unknownKey(key) }
+                let work: UUID = row["w"]
+                if !works.contains(work) { works.append(work) }
+            }
+            guard let keptId = works.first, var kept = try Work.fetchOne(conn, key: keptId) else { return 0 }
+            var absorbed = 0
+            for workId in works {
+                guard let work = try Work.fetchOne(conn, key: workId) else { continue }
+                // Chaque édition garde le titre sous lequel elle a paru.
+                try conn.execute(sql: "UPDATE edition SET title = ? WHERE workId = ? AND (title IS NULL OR title = '')",
+                                 arguments: [work.title, work.id])
+                guard workId != keptId else { continue }
+                try conn.execute(sql: "UPDATE edition SET workId = ? WHERE workId = ?", arguments: [keptId, workId])
+                try conn.execute(sql: """
+                    INSERT OR IGNORE INTO collection_item (collectionId, workId)
+                    SELECT collectionId, ? FROM collection_item WHERE workId = ?
+                    """, arguments: [keptId, workId])
+                try CatalogStore.preserveWorkNotes(from: workId, into: keptId, in: conn)
+                _ = try Work.deleteOne(conn, key: workId)
+                absorbed += 1
+            }
+            kept = try Work.fetchOne(conn, key: keptId) ?? kept
+            if kept.originalLanguage == nil,
+               let language = try String.fetchOne(conn, sql: """
+                   SELECT e.language FROM edition_key k JOIN edition e ON e.id = k.editionId WHERE k.key = ? COLLATE NOCASE
+                   """, arguments: [keys[0]]) {
+                kept.originalLanguage = language
+                try kept.update(conn)
+            }
+            let note = "Réunion sur pièce le \(date) (\(keys.joined(separator: ", "))) : \(preuve)"
+            try conn.execute(sql: """
+                UPDATE work SET notes = CASE WHEN notes IS NULL OR notes = '' THEN ? ELSE notes || char(10) || ? END WHERE id = ?
+                """, arguments: [note, note, keptId])
+            try EditionKey.refreshProvisional(forWork: keptId, conn)
+            return absorbed
+        }
+    }
+
     /// Réunit chaque groupe sous l'œuvre gardée. Rend le nombre d'œuvres absorbées.
     @discardableResult
     public static func apply(_ groups: [TranslationGroup], links: [AuthorityLink], to db: CatalogDatabase) async throws -> Int {
