@@ -107,7 +107,9 @@ public enum EditionGrouping {
     public static func proposals(in db: CatalogDatabase) async throws -> [EditionGroup] {
         try await db.pool.read { conn in
             let rows = try Row.fetchAll(conn, sql: """
-                SELECT e.id AS editionId, e.year AS year, w.title AS title, w.confidence AS confidence,
+                SELECT e.id AS editionId, e.year AS year, COALESCE(NULLIF(e.title, ''), w.title) AS title,
+                       e.language AS language, e.isbn13 AS isbn13, e.doi AS doi, e.publisher AS publisher,
+                       w.confidence AS confidence,
                        (SELECT c.name FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
                          WHERE wc.workId = w.id AND wc.role = 'author' ORDER BY wc.position LIMIT 1) AS author,
                        k.key AS key
@@ -125,10 +127,23 @@ public enum EditionGrouping {
                       !emptyTitles.contains(skeleton(title)) else { continue }
                 // Le nom de famille seul : « Achebe » et « Chinua Achebe » sont le même auteur.
                 let family = author.flatMap { CiteKeyGenerator.family($0) }?.lowercased() ?? ""
-                let signature = "\(family)|\(CiteKeyGenerator.year(year) ?? "")"
+                let language: String = row["language"] ?? ""
+                let signature = "\(family)|\(CiteKeyGenerator.year(year) ?? "")|\(language.lowercased())"
                 groups[signature, default: []].append(row)
             }
-            return groups.values.flatMap(clusters).filter { $0.count > 1 }.map { members in
+            return groups.values.flatMap(clusters).filter { members in
+                guard members.count > 1 else { return false }
+                // Même titre et même année ne prouvent pas la même édition
+                // si ses identifiants ou éditeurs connus se contredisent.
+                for field in ["isbn13", "doi", "publisher"] {
+                    let values = Set(members.compactMap { row -> String? in
+                        guard let value: String = row[field], !value.isEmpty else { return nil }
+                        return field == "publisher" ? skeleton(value) : value.lowercased().replacingOccurrences(of: "-", with: "")
+                    })
+                    if values.count > 1 { return false }
+                }
+                return true
+            }.map { members in
                 // On garde d'abord une fiche corrigée à la main, puis le titre le
                 // plus complet (le nom de fichier tronque), puis la clé nue.
                 let sorted = members.sorted { a, b in
@@ -155,6 +170,8 @@ public enum EditionGrouping {
                 guard let kept = try Edition.fetchOne(conn, key: g.keptEditionId) else { continue }
                 for id in g.absorbedEditionIds {
                     guard let edition = try Edition.fetchOne(conn, key: id), edition.id != kept.id else { continue }
+                    if let key = try EditionKey.fetchOne(conn, key: edition.id), key.origin != .generated { continue }
+                    try CatalogStore.preserveEditionContributors(from: edition.id, into: kept.id, in: conn)
                     // Les fichiers rejoignent l'édition conservée ; les collections de
                     // l'œuvre absorbée passent à l'œuvre conservée.
                     try conn.execute(sql: "UPDATE document SET editionId = ? WHERE editionId = ?",
@@ -164,14 +181,13 @@ public enum EditionGrouping {
                         SELECT collectionId, ? FROM collection_item WHERE workId = ?
                         """, arguments: [kept.workId, edition.workId])
                     _ = try Edition.deleteOne(conn, key: edition.id)
+                    if try Edition.filter(Column("workId") == edition.workId).fetchCount(conn) == 0 {
+                        try CatalogStore.preserveWorkNotes(from: edition.workId, into: kept.workId, in: conn)
+                        _ = try Work.deleteOne(conn, key: edition.workId)
+                    }
                     absorbed += 1
                 }
             }
-            try conn.execute(sql: "DELETE FROM work WHERE id NOT IN (SELECT DISTINCT workId FROM edition)")
-            try conn.execute(sql: """
-                DELETE FROM creator WHERE id NOT IN (SELECT creatorId FROM work_creator)
-                    AND id NOT IN (SELECT creatorId FROM edition_creator)
-                """)
             // La clé provisoire de l'édition gardée perd son « -b » s'il n'a plus lieu d'être.
             for g in groups {
                 if let kept = try Edition.fetchOne(conn, key: g.keptEditionId) {
@@ -271,19 +287,17 @@ public enum EditionGrouping {
                     try conn.execute(sql: """
                         UPDATE OR IGNORE authority_link SET entityId = ? WHERE entityType = 'work' AND entityId = ?
                         """, arguments: [kept.id, id])
+                    try CatalogStore.preserveWorkNotes(from: id, into: kept.id, in: conn)
                     _ = try Work.deleteOne(conn, key: id)
                     n += 1
                 }
+                kept = try Work.fetchOne(conn, key: kept.id) ?? kept
                 if kept.date == nil, let first = g.years.compactMap({ Int($0) }).min() {
                     kept.date = String(first)
                     try kept.update(conn)
                 }
                 try EditionKey.refreshProvisional(forWork: kept.id, conn)
             }
-            try conn.execute(sql: """
-                DELETE FROM creator WHERE id NOT IN (SELECT creatorId FROM work_creator)
-                    AND id NOT IN (SELECT creatorId FROM edition_creator)
-                """)
             return n
         }
     }

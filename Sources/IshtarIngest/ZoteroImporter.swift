@@ -37,6 +37,13 @@ public struct ZoteroImportReport: Sendable {
 }
 
 public struct ZoteroImporter: Sendable {
+
+    public enum ImportError: LocalizedError {
+        case cyclicCollections
+        public var errorDescription: String? {
+            "L’arborescence Zotero contient une boucle. L’import a été annulé sans modifier le catalogue."
+        }
+    }
     
     public init() {}
     
@@ -83,6 +90,19 @@ public struct ZoteroImporter: Sendable {
         }
         
         let matcher = DocumentMatcher()
+        let collectionsById = Dictionary(uniqueKeysWithValues: zCollections.map { ($0.collectionID, $0) })
+        // Valider avant toute écriture. Une base endommagée peut avoir une
+        // boucle ; la profondeur ne doit pas dépendre de la pile d'appels.
+        var validated = Set<Int>()
+        for collection in zCollections {
+            var path = Set<Int>()
+            var current: Int? = collection.collectionID
+            while let id = current, let row = collectionsById[id], !validated.contains(id) {
+                guard path.insert(id).inserted else { throw ImportError.cyclicCollections }
+                current = row.parentCollectionID
+            }
+            validated.formUnion(path)
+        }
         
         return try await catalogDB.pool.write { db in
             let documents = try Document.fetchAll(db)
@@ -134,25 +154,16 @@ public struct ZoteroImporter: Sendable {
             var zoteroIdToIshtarId: [Int: UUID] = [:]
             var skippedCollections = 0
             
-            func hasMatchedItems(_ cid: Int) -> Bool {
-                let itemIds = zCollectionItems.filter({ $0.collectionID == cid }).map { $0.itemID }
-                if itemIds.contains(where: { itemToDocument[$0] != nil }) { return true }
-                let children = zCollections.filter({ $0.parentCollectionID == cid })
-                return children.contains(where: { hasMatchedItems($0.collectionID) })
-            }
-            
-            func processCollection(_ zCol: ZoteroCollectionRow) {
-                if zoteroIdToIshtarId[zCol.collectionID] != nil { return }
-                
-                var parentIshtarId: UUID? = nil
-                if let parentZoteroId = zCol.parentCollectionID {
-                    if zoteroIdToIshtarId[parentZoteroId] == nil {
-                        if let parent = zCollections.first(where: { $0.collectionID == parentZoteroId }) {
-                            processCollection(parent)
-                        }
-                    }
-                    parentIshtarId = zoteroIdToIshtarId[parentZoteroId]
+            var relevantCollections = Set<Int>()
+            for item in zCollectionItems where itemToDocument[item.itemID] != nil {
+                var current: Int? = item.collectionID
+                while let id = current, let row = collectionsById[id], relevantCollections.insert(id).inserted {
+                    current = row.parentCollectionID
                 }
+            }
+
+            func processCollection(_ zCol: ZoteroCollectionRow) throws {
+                let parentIshtarId = zCol.parentCollectionID.flatMap { zoteroIdToIshtarId[$0] }
                 
                 if let existing = ishtarCollections.first(where: { $0.name == zCol.collectionName && $0.parentId == parentIshtarId && $0.sourceFolderPath == nil }) {
                     zoteroIdToIshtarId[zCol.collectionID] = existing.id
@@ -160,21 +171,31 @@ public struct ZoteroImporter: Sendable {
                     // Do NOT touch collections with sourceFolderPath
                     skippedCollections += 1
                 } else {
-                    if hasMatchedItems(zCol.collectionID) {
+                    if relevantCollections.contains(zCol.collectionID) {
                         let newId = UUID()
+                        let newCol = BookCollection(id: newId, name: zCol.collectionName, parentId: parentIshtarId, sourceFolderPath: nil)
                         if apply {
-                            let newCol = BookCollection(id: newId, name: zCol.collectionName, parentId: parentIshtarId, sourceFolderPath: nil)
-                            try? newCol.insert(db)
-                            ishtarCollections.append(newCol)
+                            try newCol.insert(db)
                         }
+                        ishtarCollections.append(newCol)
                         zoteroIdToIshtarId[zCol.collectionID] = newId
                         collectionsCreated += 1
                     }
                 }
             }
             
+            var processed = Set<Int>()
             for zCol in zCollections {
-                processCollection(zCol)
+                var ancestry: [ZoteroCollectionRow] = []
+                var current: Int? = zCol.collectionID
+                while let id = current, let row = collectionsById[id], !processed.contains(id) {
+                    ancestry.append(row)
+                    current = row.parentCollectionID
+                }
+                for row in ancestry.reversed() {
+                    try processCollection(row)
+                    processed.insert(row.collectionID)
+                }
             }
             
             var existingCollectionItems = try CollectionItem.fetchAll(db)
@@ -195,7 +216,7 @@ public struct ZoteroImporter: Sendable {
                 if !existing {
                     if apply {
                         let newColItem = CollectionItem(collectionId: ishtarColId, workId: workId)
-                        try? newColItem.insert(db)
+                        try newColItem.insert(db)
                         existingCollectionItems.append(newColItem)
                     }
                 }

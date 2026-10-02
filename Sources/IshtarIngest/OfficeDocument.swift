@@ -193,7 +193,7 @@ public enum OfficeDocument: Sendable {
                 case "tab": emit("\t")
                 case "u":
                     // Caractère Unicode ; le repli qui suit (\'xx ou ?) est à sauter.
-                    if let scalarValue = Int(argument) {
+                    if let scalarValue = Int(argument), (-32768...65535).contains(scalarValue) {
                         let value = scalarValue < 0 ? scalarValue + 65536 : scalarValue
                         if let scalar = Unicode.Scalar(UInt32(value)) {
                             emit(String(scalar))

@@ -97,10 +97,11 @@ public enum TranslationPass {
                         INSERT OR IGNORE INTO collection_item (collectionId, workId)
                         SELECT collectionId, ? FROM collection_item WHERE workId = ?
                         """, arguments: [kept.id, work.id])
-                    try conn.execute(sql: "DELETE FROM authority_link WHERE entityType = 'work' AND entityId = ?", arguments: [work.id])
+                    try CatalogStore.preserveWorkNotes(from: work.id, into: kept.id, in: conn)
                     _ = try Work.deleteOne(conn, key: work.id)
                     absorbed += 1
                 }
+                kept = try Work.fetchOne(conn, key: kept.id) ?? kept
                 // L'œuvre : son titre original et sa date, sa langue.
                 if kept.confidence != .high {
                     if let original = g.originalTitle, !original.isEmpty { kept.title = original }
@@ -110,10 +111,6 @@ public enum TranslationPass {
                 }
                 try EditionKey.refreshProvisional(forWork: kept.id, conn)
             }
-            try conn.execute(sql: """
-                DELETE FROM creator WHERE id NOT IN (SELECT creatorId FROM work_creator)
-                    AND id NOT IN (SELECT creatorId FROM edition_creator)
-                """)
             return absorbed
         }
     }

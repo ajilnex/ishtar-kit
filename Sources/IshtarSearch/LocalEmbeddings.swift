@@ -37,6 +37,10 @@ public final class LocalEmbeddings: @unchecked Sendable {
 
     public var hasAssets: Bool { embedding.hasAvailableAssets }
 
+    /// Charge uniquement un actif déjà installé : le scan de l'app ne demande
+    /// jamais de téléchargement système en arrière-plan.
+    public func loadInstalledAssets() throws { try loadIfNeeded() }
+
     /// Demande à macOS de télécharger les ressources du modèle si nécessaire
     /// (téléchargement système, une fois). Retourne quand elles sont prêtes.
     public func ensureAssets() async throws {

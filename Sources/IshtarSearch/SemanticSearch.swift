@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import GRDB
 import IshtarCatalog
 
@@ -22,34 +23,43 @@ public struct SemanticIndexer: Sendable {
     let db: CatalogDatabase
     let store: EmbeddingStore
     let embeddings: LocalEmbeddings
+    let allowAssetDownload: Bool
 
-    public init(db: CatalogDatabase, store: EmbeddingStore, embeddings: LocalEmbeddings) {
+    public init(db: CatalogDatabase, store: EmbeddingStore, embeddings: LocalEmbeddings,
+                allowAssetDownload: Bool = true) {
         self.db = db
         self.store = store
         self.embeddings = embeddings
+        self.allowAssetDownload = allowAssetDownload
     }
 
     /// Vectorise toutes les pages en attente. Retourne le nombre traité.
     public func indexAllPending(
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> Int {
-        try await embeddings.ensureAssets()
+        if allowAssetDownload { try await embeddings.ensureAssets() }
+        else { try embeddings.loadInstalledAssets() }
         try store.prepare(modelID: embeddings.modelID, dimension: embeddings.dimension)
 
-        let already = try store.indexedPages()
-        let pending: [(EmbeddingStore.PageKey, String)] = try await db.pool.read { conn in
+        let already = try store.indexedContentDigests()
+        let pages: [(EmbeddingStore.PageKey, String)] = try await db.pool.read { conn in
             let rows = try Row.fetchAll(conn, sql: """
-                SELECT documentId, pageNumber, content FROM document_page
+                SELECT documentId, pageNumber, content FROM document_page ORDER BY documentId, pageNumber
                 """)
             return rows.compactMap { row in
                 // GRDB stocke les UUID en blob de 16 octets : on décode en UUID,
                 // jamais en String (leçon d'épreuve du réel).
                 guard let id: UUID = row["documentId"] else { return nil }
                 let key = EmbeddingStore.PageKey(documentId: id, pageNumber: row["pageNumber"])
-                guard !already.contains(key) else { return nil }
                 return (key, row["content"])
             }
         }
+        try Task.checkCancellation()
+        let digests = Dictionary(uniqueKeysWithValues: pages.map { ($0.0, Self.digest($0.1)) })
+        // Identité de page ET contenu : OCR et remplacement de fichier ne
+        // peuvent plus laisser un ancien vecteur sous la même référence.
+        try store.remove(Set(already.keys.filter { digests[$0] != already[$0] }))
+        let pending = pages.filter { digests[$0.0] != already[$0.0] }
 
         let total = pending.count
         guard total > 0 else { return 0 }
@@ -57,7 +67,7 @@ public struct SemanticIndexer: Sendable {
         var done = 0
         var batch: [(key: EmbeddingStore.PageKey, vector: [Float])] = []
         for (key, content) in pending {
-            if Task.isCancelled { break }
+            try Task.checkCancellation()
             do {
                 batch.append((key, try embeddings.embed(content)))
             } catch {
@@ -66,14 +76,20 @@ public struct SemanticIndexer: Sendable {
             }
             done += 1
             if batch.count >= 64 {
-                try store.insert(batch)
+                try Task.checkCancellation()
+                try store.insert(batch, contentDigests: digests)
                 batch.removeAll(keepingCapacity: true)
                 progress?(done, total)
             }
         }
-        try store.insert(batch)
+        try Task.checkCancellation()
+        try store.insert(batch, contentDigests: digests)
         progress?(done, total)
         return done
+    }
+
+    static func digest(_ content: String) -> String {
+        SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -93,7 +109,7 @@ public struct SemanticSearch: Sendable {
 
     public func search(_ query: String, limit: Int = 20) async throws -> [SemanticHit] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+        guard !trimmed.isEmpty, limit > 0 else { return [] }
 
         // Voie lexicale (peut être vide si aucun terme ne correspond).
         let lexical = (try? await FulltextSearch(db: db).search(trimmed, limit: 40)) ?? []
@@ -101,8 +117,11 @@ public struct SemanticSearch: Sendable {
         // Voie sémantique (peut être vide si l'index n'est pas construit).
         var semantic: [(key: EmbeddingStore.PageKey, distance: Double)] = []
         if (try? store.count()).map({ $0 > 0 }) == true {
-            let vector = try embeddings.embed(trimmed)
-            semantic = try store.nearest(to: vector, limit: 40)
+            // L’index vectoriel est facultatif : son échec ne retire jamais
+            // les passages que le plein texte sait trouver.
+            if let vector = try? embeddings.embed(trimmed) {
+                semantic = (try? store.nearest(to: vector, limit: 40)) ?? []
+            }
         }
 
         // Fusion RRF : score(page) = Σ 1/(60 + rang) sur chaque liste.
@@ -118,7 +137,11 @@ public struct SemanticSearch: Sendable {
             let key = Key(doc: item.key.documentId, page: item.key.pageNumber)
             scores[key, default: 0] += 1.0 / (60.0 + Double(rank + 1))
         }
-        let ranked = Array(scores.sorted { $0.value > $1.value }.prefix(limit))
+        let ranked = Array(scores.sorted {
+            if $0.value != $1.value { return $0.value > $1.value }
+            if $0.key.doc != $1.key.doc { return $0.key.doc.uuidString < $1.key.doc.uuidString }
+            return $0.key.page < $1.key.page
+        }.prefix(limit))
         guard !ranked.isEmpty else { return [] }
         let snippets = ftsSnippets // copie immuable pour la fermeture Sendable
 
@@ -141,7 +164,7 @@ public struct SemanticSearch: Sendable {
                     JOIN work w ON w.id = wc.workId
                     JOIN edition e ON e.workId = w.id
                     JOIN document d ON d.editionId = e.id
-                    WHERE d.id = ? ORDER BY wc.position
+                    WHERE d.id = ? AND wc.role = 'author' ORDER BY wc.position
                     """, arguments: [key.doc])
                 let content: String? = row["content"]
                 let excerpt = snippets[.init(doc: key.doc, page: key.page)]

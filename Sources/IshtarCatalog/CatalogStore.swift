@@ -209,6 +209,17 @@ public struct CatalogStore: Sendable {
             guard let keptEditionId = kept.editionId else {
                 throw DatabaseError(message: "Le document conservé n'a pas d'édition.")
             }
+            let movedIds = Set(duplicates.filter { $0 != keptDocumentId })
+            let copies = try Document.fetchAll(conn, keys: Array(movedIds))
+            let affectedEditions = Set(copies.compactMap(\.editionId)).subtracting([keptEditionId])
+            // Une référence déjà copiée ou publiée ne doit pas disparaître.
+            for id in affectedEditions {
+                let remaining = try Document.filter(Column("editionId") == id).fetchAll(conn)
+                    .contains { !movedIds.contains($0.id) }
+                if !remaining, let key = try EditionKey.fetchOne(conn, key: id), key.origin != .generated {
+                    throw DatabaseError(message: "L’édition porte une clé stabilisée (\(key.key)). Regroupez ses œuvres en conservant cette édition.")
+                }
+            }
 
             // Rattachement des copies à l'édition conservée, statut reconnu.
             for id in duplicates where id != keptDocumentId {
@@ -238,15 +249,50 @@ public struct CatalogStore: Sendable {
                 }
             }
 
-            // Ramasse-miettes : éditions sans document, œuvres sans édition.
-            try conn.execute(sql: """
-                DELETE FROM edition WHERE id NOT IN
-                    (SELECT DISTINCT editionId FROM document WHERE editionId IS NOT NULL)
-                """)
-            try conn.execute(sql: """
-                DELETE FROM work WHERE id NOT IN (SELECT DISTINCT workId FROM edition)
-                """)
+            // Seules les fiches réellement absorbées sont ramassées. Un ancien
+            // brouillon sans fichier, ailleurs dans le catalogue, reste intact.
+            let keptEdition = try Edition.fetchOne(conn, key: keptEditionId)
+            for id in affectedEditions {
+                guard try Document.filter(Column("editionId") == id).fetchCount(conn) == 0,
+                      let absorbed = try Edition.fetchOne(conn, key: id) else { continue }
+                try Self.preserveEditionContributors(from: id, into: keptEditionId, in: conn)
+                _ = try Edition.deleteOne(conn, key: id)
+                if let keptWorkId = keptEdition?.workId,
+                   try Edition.filter(Column("workId") == absorbed.workId).fetchCount(conn) == 0 {
+                    try Self.preserveWorkNotes(from: absorbed.workId, into: keptWorkId, in: conn)
+                    _ = try Work.deleteOne(conn, key: absorbed.workId)
+                }
+            }
         }
+    }
+
+    package static func preserveWorkNotes(from source: UUID, into destination: UUID, in conn: Database) throws {
+        guard source != destination, let absorbed = try Work.fetchOne(conn, key: source),
+              var kept = try Work.fetchOne(conn, key: destination) else { return }
+        if let note = absorbed.notes, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           kept.notes != note {
+            let prior = kept.notes.flatMap { $0.isEmpty ? nil : $0 + "\n\n" } ?? ""
+            kept.notes = prior + "[\(absorbed.title)]\n" + note
+            try kept.update(conn)
+        }
+        try conn.execute(sql: """
+            INSERT OR IGNORE INTO collection_item (collectionId, workId)
+            SELECT collectionId, ? FROM collection_item WHERE workId = ?
+            """, arguments: [destination, source])
+        try conn.execute(sql: """
+            INSERT OR IGNORE INTO authority_link
+                (entityType, entityId, scheme, identifier, label, status, evidence, dateAssigned)
+            SELECT entityType, ?, scheme, identifier, label, status, evidence, dateAssigned
+            FROM authority_link WHERE entityType = 'work' AND entityId = ?
+            """, arguments: [destination, source])
+        try conn.execute(sql: "DELETE FROM authority_link WHERE entityType = 'work' AND entityId = ?", arguments: [source])
+    }
+
+    package static func preserveEditionContributors(from source: UUID, into destination: UUID, in conn: Database) throws {
+        try conn.execute(sql: """
+            INSERT OR IGNORE INTO edition_creator (editionId, creatorId, role, position)
+            SELECT ?, creatorId, role, position FROM edition_creator WHERE editionId = ?
+            """, arguments: [destination, source])
     }
 
     /// WP-07 — Réversibilité : détache une copie en lui redonnant une fiche

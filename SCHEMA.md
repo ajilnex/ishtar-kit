@@ -139,17 +139,28 @@ Additive, après v6.
 - **edition_key** — la clé de citation d'une édition (`Adorno1951Minima`).
   - `editionId` → `edition(id)` (clé primaire, `ON DELETE CASCADE`).
   - `key` : `UNIQUE`, comparée **sans égard à la casse** (`COLLATE NOCASE`).
-  - `origin` : `generated` (calculée) ou `manual` (saisie par l'utilisateur).
+  - `origin` : `generated` (calculée, encore révisable), `stable` (déjà utilisée
+    hors du catalogue) ou `manual` (saisie par l'utilisateur).
   - `dateAssigned`.
 - Forme générée (`CiteKeyGenerator`) : nom de famille du premier auteur,
   année de l'œuvre (`work.date`, à défaut `edition.year`, sinon `ND`),
   premier mot significatif du titre — translittérés en ASCII, capitalisés.
   Collision : suffixe `-<année d'édition>` si elle diffère de celle de
   l'œuvre, sinon `-b`, `-c`…
-- **Règle cardinale : une clé attribuée ne change plus d'elle-même.** Elle
-  circule hors d'Ishtar (Zotero, sites, BibTeX). Corriger une fiche ne la
-  recalcule pas ; seule une correction de la clé elle-même la remplace
-  (`origin = manual`). L'ingestion attribue une clé à toute édition nouvelle.
+- **Une clé stable ou manuelle ne change plus d'elle-même.** L'ingestion
+  attribue une clé générée à chaque édition nouvelle ; tant qu'elle n'a pas
+  été utilisée hors du catalogue, une correction peut la recalculer.
+  `stabilizeKeys` fige les clés exportées ou copiées (Zotero, sites, BibTeX,
+  liens de lecture). Seule une correction explicite de la clé la remplace
+  (`origin = manual`). Une fusion refuse d'effacer la clé stable ou manuelle
+  de l'édition absorbée.
+
+Le fichier voisin `embeddings.sqlite` est un **index régénérable**, distinct du
+format d'échange ci-dessus. Chaque passage vectorisé conserve désormais
+`contentDigest`, empreinte du texte : un passage modifié est supprimé de
+l'index puis réindexé, même si document et numéro de page restent identiques.
+Une restauration du catalogue vide cet index. Aucune migration supplémentaire
+du catalogue n'est introduite par cette consolidation (v8 conservée).
 
 ## Migration v8 — Liens d'autorité (lot F, 24/09)
 

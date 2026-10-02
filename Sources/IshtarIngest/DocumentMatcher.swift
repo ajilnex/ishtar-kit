@@ -59,8 +59,13 @@ public struct DocumentMatcher: Sendable {
         
         // 1. Fichier exact
         for path in query.fileNames {
+            let fullMatches = documents.filter { $0.filePath == path && !$0.isMissing }
+            if fullMatches.count == 1, let doc = fullMatches.first {
+                return DocumentMatch(document: doc, signal: .strong(reason: "chemin exact"), guess: guess)
+            }
             let fileName = URL(fileURLWithPath: path).lastPathComponent
-            if let doc = documents.first(where: { $0.originalFileName == fileName }) {
+            let matches = documents.filter { $0.originalFileName == fileName && !$0.isMissing }
+            if matches.count == 1, let doc = matches.first {
                 return DocumentMatch(document: doc, signal: .strong(reason: "fichier exact (\(fileName))"), guess: guess)
             }
         }
@@ -88,10 +93,10 @@ public struct DocumentMatcher: Sendable {
             for work in works {
                 let workTitleNorm = work.title.folding(options: .diacriticInsensitive, locale: .current).lowercased()
                 if workTitleNorm == normalizedTitle {
-                    if let creators = try? Creator.fetchAll(db, sql: "SELECT creator.* FROM creator JOIN work_creator ON creator.id = work_creator.creatorId WHERE work_creator.workId = ?", arguments: [work.id]) {
+                    if let creators = try? Creator.fetchAll(db, sql: "SELECT creator.* FROM creator JOIN work_creator ON creator.id = work_creator.creatorId WHERE work_creator.workId = ? AND work_creator.role = 'author'", arguments: [work.id]) {
                         
-                        let entryNormAuthors = BibTeXParser.normalizeAuthors(rawAuthors).map { $0.folding(options: .diacriticInsensitive, locale: .current).lowercased() }
-                        let workNormAuthors = creators.map { $0.name.folding(options: .diacriticInsensitive, locale: .current).lowercased() }
+                        let entryNormAuthors = BibTeXParser.normalizeAuthors(rawAuthors).map { TypographyRestorer.skeleton(TypographyRestorer.normalizedAuthor($0)) }
+                        let workNormAuthors = creators.map { TypographyRestorer.skeleton(TypographyRestorer.normalizedAuthor($0.name)) }
                         
                         let intersection = Set(entryNormAuthors).intersection(Set(workNormAuthors))
                         if !intersection.isEmpty {

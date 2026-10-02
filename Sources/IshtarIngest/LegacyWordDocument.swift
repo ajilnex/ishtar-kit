@@ -313,12 +313,14 @@ struct CompoundFile {
     static func chain(data: Data, fat: [UInt32], sectorSize: Int,
                       first: UInt32, size: Int) -> Data {
         var output = Data()
-        output.reserveCapacity(size)
+        output.reserveCapacity(min(max(0, size), data.count))
         var sector = first
         var steps = 0
         let limit = size / sectorSize + 2
+        var visited = Set<UInt32>()
         while sector != endOfChain, sector != freeSector,
               Int(sector) < fat.count, output.count < size, steps <= limit {
+            guard visited.insert(sector).inserted else { break }
             guard let block = rawSector(data, sector, sectorSize) else { break }
             output.append(block)
             sector = fat[Int(sector)]
@@ -330,12 +332,14 @@ struct CompoundFile {
     static func miniChain(miniStream: Data, miniFAT: [UInt32], miniSectorSize: Int,
                           first: UInt32, size: Int) -> Data {
         var output = Data()
-        output.reserveCapacity(size)
+        output.reserveCapacity(min(max(0, size), miniStream.count))
         var sector = first
         var steps = 0
         let limit = size / miniSectorSize + 2
+        var visited = Set<UInt32>()
         while sector != endOfChain, sector != freeSector,
               Int(sector) < miniFAT.count, output.count < size, steps <= limit {
+            guard visited.insert(sector).inserted else { break }
             let start = miniStream.startIndex + Int(sector) * miniSectorSize
             guard start + miniSectorSize <= miniStream.endIndex else { break }
             output.append(miniStream.subdata(in: start ..< (start + miniSectorSize)))

@@ -68,8 +68,10 @@ public actor DaemonSession {
 
         do {
             var citationRetries = 0
+            var emittedAnswer = false
 
             for _ in 0..<Self.maxIterations {
+                try Task.checkCancellation()
                 var responseText = ""
                 var toolCalls: [LLMToolCall] = []
 
@@ -82,8 +84,9 @@ public actor DaemonSession {
                     case .finished(let calls):
                         toolCalls = calls
                     }
-                    if Task.isCancelled { break }
+                    try Task.checkCancellation()
                 }
+                try Task.checkCancellation()
 
                 transcript.append(LLMMessage(role: .assistant, content: responseText,
                                              toolCalls: toolCalls))
@@ -91,6 +94,7 @@ public actor DaemonSession {
                 // Tour outillé : exécuter puis reboucler.
                 if !toolCalls.isEmpty, !Task.isCancelled {
                     for call in toolCalls {
+                        try Task.checkCancellation()
                         continuation.yield(.toolCall(name: call.name,
                                                      summary: Self.summary(of: call)))
                         let (result, ui) = await toolbox.execute(
@@ -105,40 +109,51 @@ public actor DaemonSession {
                 // Réponse finale : boucle de citations vérifiées.
                 guard let verifier else {
                     continuation.yield(.token(responseText))
+                    emittedAnswer = true
                     break
                 }
                 let checks = await verifier.verify(text: responseText)
                 let failures = checks.filter { $0.verdict.isFailure }
+                let malformed = CitationVerifier.hasUnparsedMarkers(in: responseText)
 
-                if !failures.isEmpty, citationRetries < Self.maxCitationRetries {
+                if (!failures.isEmpty || malformed), citationRetries < Self.maxCitationRetries {
                     citationRetries += 1
                     continuation.yield(.toolCall(
                         name: "vérification",
                         summary: "\(failures.count) citation(s) à corriger"))
                     transcript.append(LLMMessage(
                         role: .user,
-                        content: CitationVerifier.feedback(for: failures)))
+                        content: CitationVerifier.feedback(for: failures)
+                            + (malformed ? "\nUn marqueur de citation est mal formé. Respecte exactement [[cite:UUID|p=N|\"mots exacts\"]]." : "")))
                     continue
                 }
 
                 // Émission : texte rendu lisible + puces + avertissement résiduel.
                 var text = CitationVerifier.rendered(text: responseText, checks: checks)
-                if !failures.isEmpty {
+                try Task.checkCancellation()
+                if !failures.isEmpty || malformed {
                     text += "\n\n⚠️ Certaines citations n'ont pas pu être vérifiées contre la bibliothèque."
                 }
                 continuation.yield(.token(text))
+                emittedAnswer = true
                 if !checks.isEmpty {
                     continuation.yield(.citations(checks.map { check in
                         CitationChip(documentId: check.citation.documentId,
                                      page: check.citation.page,
                                      title: check.title,
                                      quote: check.citation.quote,
-                                     verified: !check.verdict.isFailure)
+                                     verified: check.verdict.isVerified)
                     }))
                 }
                 break
             }
-            continuation.yield(.finished)
+            if emittedAnswer {
+                continuation.yield(.finished)
+            } else {
+                continuation.yield(.failed(message: "Le Démon a atteint sa limite de tours sans réponse vérifiable. Vous pouvez préciser la question."))
+            }
+        } catch is CancellationError {
+            // Un tour interrompu ne produit aucune réponse partielle non vérifiée.
         } catch {
             continuation.yield(.failed(message: error.localizedDescription))
         }

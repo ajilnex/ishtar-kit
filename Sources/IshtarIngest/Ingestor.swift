@@ -111,8 +111,8 @@ public struct Ingestor: Sendable {
             // Documents déjà catalogués pour CE dossier source.
             let existingDocs = try Document.fetchAll(dbConn, sql: """
                 SELECT * FROM document
-                WHERE filePath = ? OR filePath LIKE ?
-                """, arguments: [rootPath, rootPath + "/%"])
+                WHERE filePath = ? OR substr(filePath, 1, ?) = ?
+                """, arguments: [rootPath, rootPath.unicodeScalars.count + 1, rootPath + "/"])
             let existingDocsByPath = Dictionary(uniqueKeysWithValues: existingDocs.map { ($0.filePath, $0) })
             let existingPaths = Set(existingDocsByPath.keys)
 
@@ -123,6 +123,16 @@ public struct Ingestor: Sendable {
             let continuingPaths = existingPaths.intersection(scannedPaths)
             for path in continuingPaths {
                 var doc = existingDocsByPath[path]!
+                let file = scannedFilesByPath[path]!
+                let changed = file.contentHash.map { $0 != doc.contentHash } ?? (file.fileSize != doc.fileSize)
+                if changed {
+                    // L’identité et la curation restent ; le texte sera remplacé
+                    // uniquement après une nouvelle extraction réussie.
+                    doc.contentHash = file.contentHash ?? doc.contentHash
+                    doc.fileSize = file.fileSize
+                    doc.format = file.format
+                    doc.isTextExtracted = false
+                }
                 if doc.isMissing {
                     // Document introuvable redevenu accessible au même endroit
                     doc.isMissing = false
@@ -130,6 +140,7 @@ public struct Ingestor: Sendable {
                     result.recovered += 1
                 } else {
                     result.kept += 1
+                    if changed { try doc.update(dbConn) }
                 }
             }
 
@@ -157,8 +168,7 @@ public struct Ingestor: Sendable {
             }
 
             let continuingHashes = Set(
-                existingDocs.filter { continuingPaths.contains($0.filePath) }
-                    .compactMap(\.contentHash)
+                report.files.filter { continuingPaths.contains($0.path) }.compactMap(\.contentHash)
             )
 
             var reassociatedDocIds: Set<UUID> = []

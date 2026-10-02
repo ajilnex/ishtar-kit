@@ -28,8 +28,9 @@ public struct OCRExtractor: Sendable {
         documentId: UUID, into db: CatalogDatabase,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> Int? {
+        try Task.checkCancellation()
         guard let document = try await db.pool.read({ try Document.fetchOne($0, key: documentId) }),
-              document.format == .pdf
+              document.format == .pdf, !document.isMissing
         else { return nil }
         guard let pdf = PDFDocument(url: URL(fileURLWithPath: document.filePath)) else { return nil }
 
@@ -37,11 +38,11 @@ public struct OCRExtractor: Sendable {
         var recognized: [(number: Int, content: String)] = []
 
         for pageIndex in 0 ..< pageCount {
-            if Task.isCancelled { break }
-            guard let page = pdf.page(at: pageIndex) else { continue }
+            try Task.checkCancellation()
+            guard let page = pdf.page(at: pageIndex) else { throw OCRError.pageUnavailable(pageIndex + 1) }
 
             // 1. Rendu bitmap partagé, puis reconnaissance (moteur de production).
-            guard let image = Self.renderPage(page) else { continue }
+            guard let image = Self.renderPage(page) else { throw OCRError.pageUnavailable(pageIndex + 1) }
             let text = try await Self.recognize(in: image, engine: .best)
 
             // 3. On ne retient que les pages effectivement porteuses de texte.
@@ -55,13 +56,17 @@ public struct OCRExtractor: Sendable {
         // d'une table de pages nette pour ce document, on réinsère, puis on
         // éteint needsOCR sur le document frais.
         let pages = recognized
+        try Task.checkCancellation()
+        guard !pages.isEmpty else { return 0 }
         try await db.pool.write { conn in
+            try Task.checkCancellation()
+            guard var fresh = try Document.fetchOne(conn, key: documentId),
+                  !fresh.isMissing, fresh.contentHash == document.contentHash else { return }
             try DocumentPage.filter(Column("documentId") == documentId).deleteAll(conn)
             for page in pages {
                 try DocumentPage(documentId: documentId, pageNumber: page.number, content: page.content)
                     .insert(conn)
             }
-            guard var fresh = try Document.fetchOne(conn, key: documentId) else { return }
             fresh.isTextExtracted = true
             fresh.needsOCR = false
             try fresh.update(conn)
@@ -80,8 +85,17 @@ public struct OCRExtractor: Sendable {
         case legacyText
     }
 
-    public enum OCRError: Error, Sendable {
+    public enum OCRError: LocalizedError, Sendable {
         case engineUnavailable(String)
+        case pageUnavailable(Int)
+
+        public var errorDescription: String? {
+            switch self {
+            case .engineUnavailable(let message): return message
+            case .pageUnavailable(let page):
+                return "Impossible de rendre la page \(page). Le texte précédent est conservé."
+            }
+        }
     }
 
     /// Rend une page PDF en bitmap RGB (fond blanc, échelle 2.5 par défaut), sans
@@ -89,7 +103,13 @@ public struct OCRExtractor: Sendable {
     /// travaillent sur la MÊME image.
     public static func renderPage(_ page: PDFPage, scale: CGFloat = 2.5) -> CGImage? {
         let bounds = page.bounds(for: .mediaBox)
-        let width = Int(bounds.width * scale), height = Int(bounds.height * scale)
+        let scaledWidth = bounds.width * scale, scaledHeight = bounds.height * scale
+        guard scaledWidth.isFinite, scaledHeight.isFinite,
+              scaledWidth > 0, scaledHeight > 0,
+              scaledWidth <= 16384, scaledHeight <= 16384,
+              scaledWidth * scaledHeight <= 64_000_000,
+              page.pageRef != nil else { return nil }
+        let width = Int(scaledWidth), height = Int(scaledHeight)
         guard width > 0, height > 0,
               let ctx = CGContext(data: nil, width: width, height: height,
                                   bitsPerComponent: 8, bytesPerRow: 0,

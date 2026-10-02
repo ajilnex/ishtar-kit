@@ -35,6 +35,25 @@ struct ZoteroImportTests {
             """)
         }
     }
+
+    @Test("Une boucle de collections annule l'import entier sans toucher le catalogue")
+    func cyclicCollectionsLeaveCatalogIntact() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let work = Work(title: "Fiche conservée", notes: "Note privée")
+        try await db.pool.write { try work.insert($0) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ZoteroCycle-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("zotero.sqlite")
+        try createDummyZoteroDatabase(at: source)
+        let queue = try DatabaseQueue(path: source.path)
+        try await queue.write { try $0.execute(sql: "UPDATE collections SET parentCollectionID = 2 WHERE collectionID = 1") }
+        await #expect(throws: ZoteroImporter.ImportError.self) {
+            try await ZoteroImporter().importDatabase(at: source, into: db, apply: true)
+        }
+        #expect(try await db.pool.read { try Work.fetchOne($0, key: work.id)?.notes } == "Note privée")
+        #expect(try await db.pool.read { try BookCollection.fetchCount($0) } == 0)
+    }
     
     @Test("Import d'une base Zotero avec arborescence et correspondances")
     func zoteroImport() async throws {

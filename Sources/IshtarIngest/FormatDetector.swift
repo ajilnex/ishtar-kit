@@ -171,9 +171,30 @@ public enum FormatDetector: Sendable {
         guard let fileURL, let archive = try? Archive(url: fileURL, accessMode: .read) else {
             return false
         }
-        return archive["META-INF/rights.xml"] != nil
-            || archive["META-INF/license.lcpl"] != nil
-            || archive["META-INF/encryption.xml"] != nil
+        if archive["META-INF/rights.xml"] != nil || archive["META-INF/license.lcpl"] != nil { return true }
+        guard let entry = archive["META-INF/encryption.xml"] else { return false }
+        guard entry.uncompressedSize <= 262144 else { return true }
+        var data = Data()
+        do { _ = try archive.extract(entry) { data.append($0) } }
+        catch { return true }
+        return !fontObfuscationOnly(data)
+    }
+
+    /// EPUB utilise aussi encryption.xml pour les polices embarquées libres
+    /// de DRM. Le standard IDPF et le lecteur Foliate savent les désobfusquer.
+    static func fontObfuscationOnly(_ data: Data) -> Bool {
+        guard let xml = try? XMLDocument(data: data, options: .nodeLoadExternalEntitiesNever),
+              let entries = try? xml.nodes(forXPath: "//*[local-name()='EncryptedData']"),
+              !entries.isEmpty else { return false }
+        let algorithms = ["http://www.idpf.org/2008/embedding", "http://ns.adobe.com/pdf/enc#RC"]
+        return entries.allSatisfy { entry in
+            let methods = try? entry.nodes(forXPath: "*[local-name()='EncryptionMethod']/@Algorithm")
+            let references = try? entry.nodes(forXPath: "*[local-name()='CipherData']/*[local-name()='CipherReference']/@URI")
+            guard methods?.count == 1, let algorithm = methods?.first?.stringValue,
+                  algorithms.contains(algorithm), references?.count == 1,
+                  let path = references?.first?.stringValue else { return false }
+            return ["otf", "ttf", "woff", "woff2"].contains((path as NSString).pathExtension.lowercased())
+        }
     }
 
     // MARK: - Famille MOBI

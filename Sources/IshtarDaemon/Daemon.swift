@@ -36,7 +36,7 @@ public enum DaemonEvent: Sendable {
 
 /// Une citation vérifiée, prête pour l'interface.
 public struct CitationChip: Sendable, Identifiable, Equatable {
-    public var id: String { "\(documentId)-\(page)" }
+    public var id: String { "\(documentId)-\(page)-\(quote ?? "")" }
     public let documentId: UUID
     public let page: Int
     public let title: String
@@ -93,4 +93,3 @@ public protocol EmbeddingProvider: Sendable {
 }
 
 // MARK: - Outils
-

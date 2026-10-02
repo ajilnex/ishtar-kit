@@ -409,7 +409,7 @@ struct HuffCDIC: Sendable {
 
         // Les CDIC suivent le HUFF : chacun porte une tranche du dictionnaire.
         var entries: [(Data, Bool)] = []
-        for index in 1 ..< headers.huffCount {
+        for index in 1 ..< min(headers.huffCount, pdb.bounds.count) {
             guard let record = pdb.record(start + headers.huffRecord + index),
                   record.count >= 16,
                   String(decoding: record[record.startIndex ..< (record.startIndex + 4)],
@@ -422,7 +422,7 @@ struct HuffCDIC: Sendable {
             guard length > 0, length < record.count, codeLength < 32 else { continue }
 
             let body = record.subdata(in: (cdicBase + length) ..< record.endIndex)
-            let count = min(1 << codeLength, max(0, total - entries.count))
+            let count = min(1 << codeLength, max(0, total - entries.count), body.count / 2)
             for slot in 0 ..< count {
                 let pointer = Int(FormatDetector.be16(body, body.startIndex + slot * 2))
                 guard pointer + 2 <= body.count else { continue }

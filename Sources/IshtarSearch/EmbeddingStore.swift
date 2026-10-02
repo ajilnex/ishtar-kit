@@ -30,9 +30,13 @@ public final class EmbeddingStore: Sendable {
                     vec_rowid INTEGER PRIMARY KEY,
                     document_id TEXT NOT NULL,
                     page_number INTEGER NOT NULL,
+                    content_digest TEXT NOT NULL DEFAULT '',
                     UNIQUE(document_id, page_number)
                 )
                 """)
+            if try !db.columns(in: "page_map").contains(where: { $0.name == "content_digest" }) {
+                try db.execute(sql: "ALTER TABLE page_map ADD COLUMN content_digest TEXT NOT NULL DEFAULT ''")
+            }
         }
     }
 
@@ -80,6 +84,36 @@ public final class EmbeddingStore: Sendable {
         }
     }
 
+    public func indexedContentDigests() throws -> [PageKey: String] {
+        try pool.read { db in
+            Dictionary(uniqueKeysWithValues: try Row.fetchAll(db, sql: "SELECT * FROM page_map").compactMap { row in
+                guard let id = UUID(uuidString: row["document_id"]) else { return nil }
+                return (PageKey(documentId: id, pageNumber: row["page_number"]), row["content_digest"] as String)
+            })
+        }
+    }
+
+    /// L'index est jetable ; cette purge est aussi employée après restauration.
+    public func clear() throws {
+        try pool.write { db in
+            if try db.tableExists("page_embedding") { try db.execute(sql: "DELETE FROM page_embedding") }
+            try db.execute(sql: "DELETE FROM page_map")
+        }
+    }
+
+    public func remove(_ keys: Set<PageKey>) throws {
+        guard !keys.isEmpty else { return }
+        try pool.write { db in
+            for key in keys {
+                if let rowid = try Int64.fetchOne(db, sql: "SELECT vec_rowid FROM page_map WHERE document_id = ? AND page_number = ?",
+                                                  arguments: [key.documentId.uuidString, key.pageNumber]) {
+                    try db.execute(sql: "DELETE FROM page_embedding WHERE rowid = ?", arguments: [rowid])
+                    try db.execute(sql: "DELETE FROM page_map WHERE vec_rowid = ?", arguments: [rowid])
+                }
+            }
+        }
+    }
+
     public struct PageKey: Hashable, Sendable {
         public let documentId: UUID
         public let pageNumber: Int
@@ -91,7 +125,7 @@ public final class EmbeddingStore: Sendable {
 
     /// Insère un lot de vecteurs (une transaction). Les pages déjà présentes sont
     /// remplacées.
-    public func insert(_ batch: [(key: PageKey, vector: [Float])]) throws {
+    public func insert(_ batch: [(key: PageKey, vector: [Float])], contentDigests: [PageKey: String] = [:]) throws {
         guard !batch.isEmpty else { return }
         try pool.write { db in
             for (key, vector) in batch {
@@ -111,16 +145,17 @@ public final class EmbeddingStore: Sendable {
                                arguments: [blob])
                 let rowid = db.lastInsertedRowID
                 try db.execute(sql: """
-                    INSERT INTO page_map(vec_rowid, document_id, page_number)
-                    VALUES (?, ?, ?)
-                    """, arguments: [rowid, key.documentId.uuidString, key.pageNumber])
+                    INSERT INTO page_map(vec_rowid, document_id, page_number, content_digest)
+                    VALUES (?, ?, ?, ?)
+                    """, arguments: [rowid, key.documentId.uuidString, key.pageNumber, contentDigests[key] ?? ""])
             }
         }
     }
 
     /// Les k pages les plus proches du vecteur requête (distance L2 de vec0).
     public func nearest(to query: [Float], limit: Int) throws -> [(key: PageKey, distance: Double)] {
-        try pool.read { db in
+        guard limit > 0 else { return [] }
+        return try pool.read { db in
             let blob = query.withUnsafeBufferPointer { Data(buffer: $0) }
             let rows = try Row.fetchAll(db, sql: """
                 SELECT m.document_id, m.page_number, e.distance

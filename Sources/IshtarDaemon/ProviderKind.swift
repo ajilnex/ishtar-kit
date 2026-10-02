@@ -17,7 +17,7 @@ public enum ProviderKind: Sendable, CaseIterable {
 
     /// Déduit la famille de l'adresse. Aucun réseau.
     public static func inferred(from baseURL: URL) -> ProviderKind {
-        baseURL.host?.lowercased().contains("anthropic") == true
+        baseURL.host?.lowercased() == "api.anthropic.com"
             ? .anthropic : .openAICompatible
     }
 

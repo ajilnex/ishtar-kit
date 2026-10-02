@@ -56,13 +56,20 @@ public struct CitationVerifier: Sendable {
         case quoteNotFound(title: String)
         /// L'extrait existe, mais à une autre page — le feedback le plus utile.
         case foundElsewhere(title: String, actualPage: Int)
-        /// Le texte de ce document n'est pas extrait : invérifiable (averti,
-        /// jamais renvoyé en correction — le modèle n'y peut rien).
+        /// Le texte n'est pas extrait : une source utilisable doit remplacer
+        /// cette référence avant qu'une réponse soit annoncée comme vérifiée.
         case noTextAvailable(title: String)
+        /// Source et page ne suffisent pas à prouver une affirmation.
+        case insufficientQuote(title: String)
+
+        public var isVerified: Bool {
+            if case .valid = self { return true }
+            return false
+        }
 
         public var isFailure: Bool {
             switch self {
-            case .valid, .noTextAvailable: false
+            case .valid: false
             default: true
             }
         }
@@ -75,7 +82,7 @@ public struct CitationVerifier: Sendable {
         public var title: String {
             switch verdict {
             case .valid(let t), .pageOutOfRange(let t, _), .quoteNotFound(let t),
-                 .foundElsewhere(let t, _), .noTextAvailable(let t): t
+                 .foundElsewhere(let t, _), .noTextAvailable(let t), .insufficientQuote(let t): t
             case .invalidSource: "document inconnu"
             }
         }
@@ -94,25 +101,26 @@ public struct CitationVerifier: Sendable {
 
     private func verdict(for citation: Citation) async -> Verdict {
         // 1. La source existe-t-elle ?
-        let info: (title: String, maxPage: Int?)? = try? await db.pool.read { conn in
+        let info: (title: String, pages: [DocumentPage])? = try? await db.pool.read { conn in
             guard let title = try String.fetchOne(conn, sql: """
-                SELECT w.title FROM document d
-                JOIN edition e ON e.id = d.editionId
-                JOIN work w ON w.id = e.workId
+                SELECT COALESCE(NULLIF(e.title, ''), w.title, d.originalFileName) FROM document d
+                LEFT JOIN edition e ON e.id = d.editionId
+                LEFT JOIN work w ON w.id = e.workId
                 WHERE d.id = ?
                 """, arguments: [citation.documentId]) else { return nil }
-            let maxPage = try Int.fetchOne(conn, sql: """
-                SELECT MAX(pageNumber) FROM document_page WHERE documentId = ?
-                """, arguments: [citation.documentId])
-            return (title, maxPage)
+            let pages = try DocumentPage.filter(Column("documentId") == citation.documentId)
+                .order(Column("pageNumber")).fetchAll(conn)
+            return (title, pages)
         }
         guard let info else { return .invalidSource }
 
-        // 2. Le texte est-il extrait ? Sinon : invérifiable, pas corrigeable.
-        guard let maxPage = info.maxPage else { return .noTextAvailable(title: info.title) }
+        // 2. Le texte est-il extrait ? Sinon : invérifiable.
+        guard let maxPage = info.pages.last?.pageNumber,
+              info.pages.contains(where: { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        else { return .noTextAvailable(title: info.title) }
 
         // 3. La page est-elle dans les bornes réelles ?
-        guard citation.page >= 1, citation.page <= maxPage else {
+        guard citation.page >= 1, info.pages.contains(where: { $0.pageNumber == citation.page }) else {
             return .pageOutOfRange(title: info.title, maxPage: maxPage)
         }
 
@@ -120,28 +128,19 @@ public struct CitationVerifier: Sendable {
         // document — « trouvé page X » corrige bien mieux que « non trouvé ».
         guard let quote = citation.quote,
               !quote.trimmingCharacters(in: .whitespaces).isEmpty else {
-            // Pas d'extrait fourni : source + page suffisent (citation faible
-            // mais pas fausse).
-            return .valid(title: info.title)
+            return .insufficientQuote(title: info.title)
         }
         let needle = Self.normalized(quote)
-        guard needle.count >= 8 else { return .valid(title: info.title) }
+        guard needle.count >= 8 else { return .insufficientQuote(title: info.title) }
+        let pages = info.pages
 
-        let pages: [(Int, String)] = (try? await db.pool.read { conn in
-            try Row.fetchAll(conn, sql: """
-                SELECT pageNumber, content FROM document_page
-                WHERE documentId = ? ORDER BY pageNumber
-                """, arguments: [citation.documentId])
-                .map { ($0["pageNumber"], $0["content"]) }
-        }) ?? []
-
-        if let cited = pages.first(where: { $0.0 == citation.page }),
-           Self.normalized(cited.1).contains(needle) {
+        if let cited = pages.first(where: { $0.pageNumber == citation.page }),
+           PassageLocator.contains(quote, in: cited.content) {
             return .valid(title: info.title)
         }
-        if let elsewhere = pages.first(where: { $0.0 != citation.page
-            && Self.normalized($0.1).contains(needle) }) {
-            return .foundElsewhere(title: info.title, actualPage: elsewhere.0)
+        if let elsewhere = pages.first(where: { $0.pageNumber != citation.page
+            && PassageLocator.contains(quote, in: $0.content) }) {
+            return .foundElsewhere(title: info.title, actualPage: elsewhere.pageNumber)
         }
         return .quoteNotFound(title: info.title)
     }
@@ -172,7 +171,11 @@ public struct CitationVerifier: Sendable {
                 return "- [citation_non_verifiable] L'extrait « \(cite.quote ?? "") » est introuvable dans « \(title) ». Cite les mots EXACTS du texte (via read_page)."
             case .foundElsewhere(let title, let actualPage):
                 return "- [page_erronee] L'extrait cité de « \(title) » se trouve page \(actualPage), pas page \(cite.page). Corrige le numéro de page."
-            case .valid, .noTextAvailable:
+            case .noTextAvailable(let title):
+                return "- [texte_indisponible] « \(title) » n'a aucun texte vérifiable. Ne présente pas cette citation comme une preuve ; signale la limite ou utilise une autre source."
+            case .insufficientQuote(let title):
+                return "- [extrait_manquant] Fournis six à douze mots EXACTS de « \(title) », lus avec read_page. Une source et un numéro de page seuls ne prouvent pas la citation."
+            case .valid:
                 return nil
             }
         }
@@ -190,8 +193,17 @@ public struct CitationVerifier: Sendable {
         for check in checks {
             result = result.replacingOccurrences(
                 of: check.citation.raw,
-                with: "(« \(check.title) », p. \(check.citation.page))")
+                with: "(« \(check.title) », p. \(check.citation.page)\(check.verdict.isVerified ? "" : " — non vérifiée"))")
         }
         return result
+    }
+
+    /// Ne laisse pas un marqueur mal formé contourner la validation.
+    public static func hasUnparsedMarkers(in text: String) -> Bool {
+        var remaining = text
+        for citation in extract(from: text) {
+            remaining = remaining.replacingOccurrences(of: citation.raw, with: "")
+        }
+        return remaining.contains("[[cite:")
     }
 }
