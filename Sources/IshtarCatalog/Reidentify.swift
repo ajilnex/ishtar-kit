@@ -123,6 +123,23 @@ extension CatalogStore {
         }
     }
 
+    /// Ramène à « probable » une fiche corrigée par une machine : seule une
+    /// correction humaine vaut la confiance haute (10-ARCHITECTURE, invariant
+    /// 10 ; décision d'Aubin du 02/10/2026 : les passes doivent pouvoir
+    /// reprendre ce que le modèle a établi). Ne touche que ce qui était haut.
+    public func lowerToProbable(workId: UUID, editionId: UUID?, documentId: UUID) async throws {
+        try await db.pool.write { conn in
+            try conn.execute(sql: "UPDATE work SET confidence = 'probable' WHERE id = ? AND confidence = 'high'",
+                             arguments: [workId])
+            if let editionId {
+                try conn.execute(sql: "UPDATE edition SET confidence = 'probable' WHERE id = ? AND confidence = 'high'",
+                                 arguments: [editionId])
+            }
+            try conn.execute(sql: "UPDATE document SET confidence = 'probable' WHERE id = ? AND confidence = 'high'",
+                             arguments: [documentId])
+        }
+    }
+
     /// Le document dont le fichier porte ce nom (dans n'importe quel dossier),
     /// s'il est unique : (document, édition, œuvre).
     public func document(named fileName: String) async throws -> (documentId: UUID, editionId: UUID?, workId: UUID)? {

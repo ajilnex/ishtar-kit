@@ -916,7 +916,7 @@ struct Verifier: AsyncParsableCommand {
 
 struct Corriger: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Applique des corrections vérifiées sur la page de titre (JSON) : la fiche passe en confiance haute, avec sa note de provenance."
+        abstract: "Applique des corrections vérifiées sur la page de titre (JSON), avec leur note de provenance. La fiche reste « probable » ; confiance haute seulement avec --humain."
     )
 
     struct Correction: Decodable {
@@ -945,6 +945,9 @@ struct Corriger: AsyncParsableCommand {
 
     @Option(name: .long, help: "Qui corrige (pour la note de provenance).")
     var par: String = "Claude, à la demande d'Aubin"
+
+    @Flag(name: .long, help: "Correction faite par un humain : la fiche passe en confiance haute (sinon elle reste « probable », et les passes automatiques pourront la reprendre).")
+    var humain = false
 
     @Flag(name: .long, help: "Écrit les corrections (sinon : seulement vérifier qu'on trouve chaque fichier).")
     var appliquer = false
@@ -990,6 +993,9 @@ struct Corriger: AsyncParsableCommand {
                                                            publisher: c.editeur, language: c.langue, isbn13: c.isbn))
             let note = "Vérifié sur pièce le \(day) (\(par))" + (c.preuve.map { " : \($0)" } ?? ".")
             try await store.annotateWork(target.workId, date: c.annee, note: note)
+            if !humain {
+                try await store.lowerToProbable(workId: target.workId, editionId: target.editionId, documentId: target.documentId)
+            }
             done += 1
         }
         if appliquer { print("\(done) fiches corrigées.") }
