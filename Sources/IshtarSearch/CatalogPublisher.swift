@@ -91,7 +91,10 @@ public struct PublishedFile: Codable, Sendable, Equatable {
 /// Ce qui ne doit pas sortir de la machine. Les règles viennent de
 /// l'utilisateur : Ishtar ne présume pas de ce qui est privé chez lui.
 public struct PublicationRules: Sendable, Equatable {
-    /// Dossiers (relatifs à la racine) dont rien n'est publié, sous-dossiers compris.
+    /// Dossiers dont rien n'est publié, sous-dossiers compris. Un nom seul
+    /// (`_NON_BIBLIO`, `hkp`) vaut à toute profondeur : un `_NON_BIBLIO` rangé
+    /// dans un sous-dossier reste privé (règle du 02/10/2026, après la fuite
+    /// d'une bibliographie de séminaire). Un chemin (`a/b`) vaut depuis la racine.
     public var excludedFolders: [String]
     /// Préfixes de titre d'œuvre écartés (fiches en attente de tri, par exemple).
     public var excludedTitlePrefixes: [String]
@@ -102,8 +105,10 @@ public struct PublicationRules: Sendable, Equatable {
     }
 
     func excludes(relativePath: String) -> Bool {
-        excludedFolders.contains { folder in
+        let folders = relativePath.split(separator: "/").dropLast().map(String.init)
+        return excludedFolders.contains { folder in
             relativePath == folder || relativePath.hasPrefix(folder + "/")
+                || (!folder.contains("/") && folders.contains(folder))
         }
     }
 

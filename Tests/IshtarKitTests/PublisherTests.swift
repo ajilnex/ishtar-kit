@@ -63,6 +63,22 @@ struct PublisherTests {
         #expect(report.excludedMissingOrIgnored == 2)
     }
 
+    @Test("Un dossier privé l'est à toute profondeur ; un chemin ne vaut que depuis la racine")
+    func nestedPrivateFolders() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        try await add(db, title: "Minima moralia", path: "\(root)/Adorno_1951_Minima.pdf", hash: "aaa")
+        try await add(db, title: "Bibliographie de séminaire", path: "\(root)/Wagner/_NON_BIBLIO/biblio.pdf", hash: "bbb")
+        try await add(db, title: "Carnet", path: "\(root)/a/b/_NON_BIBLIO/c/carnet.pdf", hash: "ccc")
+        try await add(db, title: "Ailleurs dans b", path: "\(root)/x/b/ailleurs.pdf", hash: "ddd")
+        try await add(db, title: "Dans a/b", path: "\(root)/a/b/dedans.pdf", hash: "eee")
+        let rules = PublicationRules(excludedFolders: ["_NON_BIBLIO/", "a/b"])
+        let (catalogue, report) = try await CatalogPublisher(db: db).build(root: root, rules: rules)
+        #expect(catalogue.editions.map(\.title).sorted() == ["Ailleurs dans b", "Minima moralia"])
+        #expect(report.excludedByRule == 3)
+        #expect(!rules.excludes(relativePath: "_NON_BIBLIO-pas-prive.pdf"))
+        #expect(rules.excludes(relativePath: "Wagner/_NON_BIBLIO/biblio.pdf"))
+    }
+
     @Test("Publication sur disque : manifeste, couvertures, base réduite sans rien de privé")
     func writing() async throws {
         let fm = FileManager.default
