@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 import IshtarCatalog
 import ZIPFoundation
 
@@ -10,6 +13,29 @@ import ZIPFoundation
 /// moteur tiers — et aucun ne passe par AppKit, qui exigerait le fil principal
 /// et rendrait le moteur intestable sans interface (invariant n° 4).
 public enum OfficeDocument: Sendable {
+    /// L'encodage d'une page de code Windows (`\\ansicpgNNNN` d'un RTF).
+    /// Core Foundation sur macOS ; sous Linux (WP-34), la table des pages de
+    /// code courantes — Windows-1252 à défaut, comme avant.
+    static func rtfEncoding(codePage: UInt32) -> String.Encoding {
+        #if canImport(Darwin)
+        return String.Encoding(rawValue:
+            CFStringConvertEncodingToNSStringEncoding(
+                CFStringConvertWindowsCodepageToEncoding(codePage)))
+        #else
+        switch codePage {
+        case 1250: return .windowsCP1250
+        case 1251: return .windowsCP1251
+        case 1253: return .windowsCP1253
+        case 1254: return .windowsCP1254
+        case 10000: return .macOSRoman
+        case 65001: return .utf8
+        case 28591: return .isoLatin1
+        case 28592: return .isoLatin2
+        default: return .windowsCP1252
+        }
+        #endif
+    }
+
     /// Le texte d'un DOCX. `word/document.xml` porte le corps ; les `<w:p>`
     /// sont les paragraphes, seule structure dont l'index ait besoin.
     public static func docxText(_ url: URL) -> String? {
@@ -96,9 +122,7 @@ public enum OfficeDocument: Sendable {
         if let range = source.range(of: #"\\ansicpg(\d+)"#, options: .regularExpression) {
             codePage = UInt32(source[range].dropFirst(8)) ?? 1252
         }
-        let encoding = String.Encoding(rawValue:
-            CFStringConvertEncodingToNSStringEncoding(
-                CFStringConvertWindowsCodepageToEncoding(codePage)))
+        let encoding = rtfEncoding(codePage: codePage)
 
         // Groupes purement techniques : leur contenu n'est jamais du texte.
         let skipped: Set<String> = [

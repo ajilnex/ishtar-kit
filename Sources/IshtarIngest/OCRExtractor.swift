@@ -1,7 +1,8 @@
-import CoreGraphics
 import Foundation
 import GRDB
 import IshtarCatalog
+#if canImport(Vision)
+import CoreGraphics
 import PDFKit
 import Vision
 
@@ -167,3 +168,39 @@ public struct OCRExtractor: Sendable {
             .joined(separator: "\n")
     }
 }
+
+#else
+/// Sous Linux (l'outil du serveur, WP-34) : pas de Vision. Même interface ;
+/// l'OCR répond « moteur indisponible » et le document garde `needsOCR`
+/// (tesseract, déjà sur le serveur, pourra prendre le relais — chantier à part).
+public struct OCRExtractor: Sendable {
+    public init() {}
+
+    @discardableResult
+    public func extract(
+        documentId: UUID, into db: CatalogDatabase,
+        progress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> Int? {
+        throw OCRError.engineUnavailable("L'OCR n'est pas encore disponible sous Linux : le document reste marqué « à OCRiser ».")
+    }
+
+    public enum Engine: String, Sendable, CaseIterable {
+        case best
+        case documentRequest
+        case legacyText
+    }
+
+    public enum OCRError: LocalizedError, Sendable {
+        case engineUnavailable(String)
+        case pageUnavailable(Int)
+
+        public var errorDescription: String? {
+            switch self {
+            case .engineUnavailable(let message): return message
+            case .pageUnavailable(let page):
+                return "Impossible de rendre la page \(page). Le texte précédent est conservé."
+            }
+        }
+    }
+}
+#endif

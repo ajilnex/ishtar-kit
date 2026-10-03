@@ -1,16 +1,19 @@
-import CoreGraphics
-import CoreText
 import Foundation
-import PDFKit
 import Testing
 import ZIPFoundation
 @testable import IshtarCatalog
 @testable import IshtarIngest
 @testable import IshtarSearch
+#if canImport(PDFKit)
+import CoreGraphics
+import CoreText
+import PDFKit
+#endif
 
 // MARK: - Fabriques de documents de test
 
 enum Fixtures {
+    #if canImport(PDFKit)
     /// Un PDF avec des métadonnées Info et un ISBN dans le texte de la première page.
     static func makePDF(at url: URL, title: String?, author: String?, pageText: String? = nil) {
         let document = PDFDocument()
@@ -28,6 +31,7 @@ enum Fixtures {
         // les tests qui ont besoin de texte de page utilisent un contenu dessiné).
         _ = pageText
     }
+    #endif
 
     /// Un EPUB minimal : container.xml + OPF Dublin Core. Si `bodyText` est fourni,
     /// on ajoute un item de spine XHTML porteur de ce texte (pour tester l'extraction).
@@ -439,6 +443,8 @@ struct IngestTests {
 
 @Suite("Entonnoir — étage métadonnées embarquées")
 struct EmbeddedMetadataTests {
+    // Ces deux PDF sont fabriqués par PDFKit : propres à macOS (WP-34).
+    #if canImport(PDFKit)
     @Test("Un PDF mal nommé mais bien renseigné est reconnu")
     func pdfInfo() throws {
         let dir = FileManager.default.temporaryDirectory
@@ -468,6 +474,7 @@ struct EmbeddedMetadataTests {
         let guess = EmbeddedMetadata.read(fileURL: url, format: .pdf)
         #expect(guess == nil)
     }
+    #endif
 
     @Test("Un EPUB livre son Dublin Core : titre, auteur, année, ISBN, langue")
     func epubOPF() throws {
@@ -1130,6 +1137,8 @@ struct CitationFormatterTests {
 
 // MARK: - OCR à la demande
 
+// Core Graphics, Core Text et Vision : propre à macOS (WP-34).
+#if canImport(PDFKit)
 @Suite("OCR — PDF muet reconnu à la demande")
 struct OCRTests {
     /// Fabrique un PDF-image (aucune couche texte) : un bitmap blanc où le texte
@@ -1218,6 +1227,7 @@ struct OCRTests {
         #expect(content.contains("1799"))
     }
 }
+#endif
 
 // MARK: - Surlignements ancrés (M2a)
 
@@ -1353,6 +1363,8 @@ struct AnnotationTests {
     }
 }
 
+// Core Graphics et PDFKit : propre à macOS (WP-34).
+#if canImport(PDFKit)
 @Suite("Annotations PDF existantes — import")
 struct PDFAnnotationImportTests {
     /// Un PDF d'une page portant une vraie couche texte (Core Text dans un
@@ -1473,6 +1485,7 @@ struct PDFAnnotationImportTests {
                          documentId: UUID()).isEmpty)
     }
 }
+#endif
 
 // MARK: - Localisation d'un passage (pur, sans PDFKit)
 

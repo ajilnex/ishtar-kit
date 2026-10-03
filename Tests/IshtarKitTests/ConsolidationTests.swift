@@ -1,3 +1,5 @@
+// Propre à macOS (cadres d'Apple ou démon) : hors de la suite Linux (WP-34).
+#if canImport(Darwin)
 import Foundation
 import GRDB
 import Testing
@@ -337,3 +339,4 @@ struct MergeIntegrityTests {
         #expect(try await EditionGrouping.proposals(in: db).isEmpty)
     }
 }
+#endif

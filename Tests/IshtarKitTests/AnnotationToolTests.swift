@@ -1,3 +1,5 @@
+// Propre à macOS (cadres d'Apple ou démon) : hors de la suite Linux (WP-34).
+#if canImport(Darwin)
 import Testing
 import Foundation
 @testable import IshtarCatalog
@@ -111,3 +113,4 @@ struct AnnotationToolTests {
         #expect(res4.contains("Aucune annotation trouvée"))
     }
 }
+#endif

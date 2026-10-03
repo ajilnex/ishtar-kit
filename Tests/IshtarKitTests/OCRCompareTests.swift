@@ -1,3 +1,5 @@
+// Propre à macOS (cadres d'Apple ou démon) : hors de la suite Linux (WP-34).
+#if canImport(Vision)
 import CoreGraphics
 import CoreText
 import Foundation
@@ -79,3 +81,4 @@ struct OCRCompareTests {
         }
     }
 }
+#endif

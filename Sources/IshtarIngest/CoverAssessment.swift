@@ -1,4 +1,6 @@
+#if canImport(CoreGraphics)
 import CoreGraphics
+#endif
 import Foundation
 
 /// Ce qu'on mesure sur une image candidate au rôle de couverture.
@@ -107,6 +109,7 @@ public enum CoverInspector {
     ///
     /// `nil` si l'image ne peut pas être lue — dans ce cas on ne refuse rien :
     /// ne pas savoir mesurer n'est pas une raison de rejeter.
+    #if canImport(CoreGraphics)
     public static func statistics(of image: CGImage) -> CoverPageStatistics? {
         let side = 64
         let bytesPerRow = side * 4
@@ -118,16 +121,24 @@ public enum CoverInspector {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.interpolationQuality = .medium
         context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+        return statistics(pixels: pixels, bytesPerPixel: 4)
+    }
+    #endif
 
+    /// La même mesure sur des pixels déjà lus (RVB ou RVBA, 8 bits par
+    /// canal) — c'est elle que l'outil du serveur emploie sous Linux, sur une
+    /// image de 64 × 64 rendue par poppler (WP-34). Pure.
+    public static func statistics(pixels: [UInt8], bytesPerPixel: Int) -> CoverPageStatistics? {
+        guard bytesPerPixel >= 3, pixels.count >= bytesPerPixel else { return nil }
         var luminances = [Double]()
-        luminances.reserveCapacity(side * side)
+        luminances.reserveCapacity(pixels.count / bytesPerPixel)
         var saturationSum = 0.0
         var inked = 0
         // 20 tranches de luminance : assez fin pour distinguer un aplat d'un
         // dégradé, assez grossier pour que le bruit d'un scan ne le disperse pas.
         var bands = [Int](repeating: 0, count: 20)
 
-        for index in stride(from: 0, to: pixels.count, by: 4) {
+        for index in stride(from: 0, to: pixels.count - bytesPerPixel + 1, by: bytesPerPixel) {
             let r = Double(pixels[index]) / 255
             let g = Double(pixels[index + 1]) / 255
             let b = Double(pixels[index + 2]) / 255

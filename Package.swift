@@ -40,6 +40,8 @@ let package = Package(
             dependencies: [
                 "IshtarCatalog", "CSQLiteVec",
                 .product(name: "GRDB", package: "GRDB.swift"),
+                // Sous Linux, la compression du corpus passe par ZIPFoundation (WP-34).
+                .product(name: "ZIPFoundation", package: "ZIPFoundation", condition: .when(platforms: [.linux])),
             ]
         ),
         .target(
@@ -58,7 +60,12 @@ let package = Package(
         ),
         .testTarget(
             name: "IshtarKitTests",
-            dependencies: ["IshtarCatalog", "IshtarIngest", "IshtarSearch", "IshtarDaemon"]
+            dependencies: [
+                "IshtarCatalog", "IshtarIngest", "IshtarSearch",
+                // Le démon (clients des modèles) n'a pas sa place sur le serveur : ses
+                // tests restent sur macOS (WP-34).
+                .target(name: "IshtarDaemon", condition: .when(platforms: [.macOS])),
+            ]
         ),
     ]
 )

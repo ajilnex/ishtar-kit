@@ -1,7 +1,9 @@
+#if canImport(PDFKit)
 import CoreGraphics
+import PDFKit
+#endif
 import Foundation
 import IshtarCatalog
-import PDFKit
 
 /// Récupère les annotations DÉJÀ présentes dans un PDF (surlignements faits
 /// dans Aperçu, Skim, Adobe…) et les convertit en surlignements Ishtar,
@@ -21,6 +23,7 @@ public struct PDFAnnotationImporter: Sendable {
     /// Les annotations de balisage d'un PDF, converties. Pur : ne touche ni le
     /// fichier ni la base. Retourne [] si le PDF est absent ou sans annotation.
     public func annotations(fromPDFAt path: String, documentId: UUID) -> [Annotation] {
+        #if canImport(PDFKit)
         guard FileManager.default.fileExists(atPath: path),
               let document = PDFDocument(url: URL(fileURLWithPath: path))
         else { return [] }
@@ -51,6 +54,11 @@ public struct PDFAnnotationImporter: Sendable {
             }
         }
         return imported
+        #else
+        // Sous Linux (l'outil du serveur, WP-34) : pas de lecteur d'annotations
+        // PDF. Elles restent dans le fichier, intactes ; rien n'est inventé.
+        return []
+        #endif
     }
 
     /// Importe dans le catalogue en ignorant ce qui s'y trouve déjà (même
@@ -77,6 +85,8 @@ public struct PDFAnnotationImporter: Sendable {
     }
 
     // MARK: - Texte visé
+
+    #if canImport(PDFKit)
 
     /// Le texte réellement couvert par l'annotation. Les quadPoints décrivent
     /// les lignes surlignées ; le `bounds` seul happerait tout le bloc.
@@ -107,6 +117,8 @@ public struct PDFAnnotationImporter: Sendable {
         }
         return pieces.joined(separator: " ")
     }
+
+    #endif
 
     // MARK: - Outils
 

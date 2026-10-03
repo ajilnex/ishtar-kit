@@ -1,7 +1,9 @@
 import Foundation
 import IshtarCatalog
-import PDFKit
 import ZIPFoundation
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// Deuxième étage de l'entonnoir : les métadonnées embarquées dans le document.
 /// Local, déterministe, sans réseau — comme tout ce qui précède les catalogues publics.
@@ -76,17 +78,16 @@ public enum EmbeddedMetadata {
     // MARK: - PDF
 
     static func readPDF(_ url: URL) -> MetadataGuess? {
-        guard let document = PDFDocument(url: url) else { return nil }
+        guard let document = PDFSource.open(url) else { return nil }
 
-        let attributes = document.documentAttributes ?? [:]
-        let title = sanitizedTitle(attributes[PDFDocumentAttribute.titleAttribute] as? String)
-        let author = sanitizedAuthor(attributes[PDFDocumentAttribute.authorAttribute] as? String)
+        let title = sanitizedTitle(document.title)
+        let author = sanitizedAuthor(document.author)
 
         // ISBN/DOI dans les premières pages (page de titre, page de copyright).
         var isbn13: String?
         var doi: String?
         for pageIndex in 0..<min(document.pageCount, 8) {
-            guard let text = document.page(at: pageIndex)?.string else { continue }
+            guard let text = document.text(pageIndex) else { continue }
             if isbn13 == nil { isbn13 = MetadataPatterns.isbn13(in: text) }
             if doi == nil { doi = MetadataPatterns.doi(in: text) }
             if isbn13 != nil, doi != nil { break }

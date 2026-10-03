@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import IshtarCatalog
 
 /// Étage 3 de l'entonnoir (opt-in, réseau) : interroge OpenLibrary pour un ISBN

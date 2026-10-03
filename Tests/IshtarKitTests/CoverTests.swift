@@ -1,3 +1,5 @@
+// Propre à macOS (cadres d'Apple ou démon) : hors de la suite Linux (WP-34).
+#if canImport(CoreGraphics)
 import CoreGraphics
 import Foundation
 import Testing
@@ -170,3 +172,4 @@ struct MOBICoverTests {
         #expect(MOBIDocument.coverImage(fileURL: url) == nil)
     }
 }
+#endif
