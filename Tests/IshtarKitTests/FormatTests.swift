@@ -125,6 +125,63 @@ enum FormatFixtures {
         }
     }
 
+    /// Un FictionBook minimal : description (titre, auteur), corps, et un bloc
+    /// `<binary>` d'image en base64 — qui ne doit JAMAIS finir dans l'index.
+    static func fictionBookXML(title: String, firstName: String, lastName: String,
+                               paragraphs: [String]) -> String {
+        let body = paragraphs.map { "<p>\($0)</p>" }.joined()
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+          <description>
+            <title-info>
+              <book-title>\(title)</book-title>
+              <author>
+                <first-name>\(firstName)</first-name>
+                <last-name>\(lastName)</last-name>
+              </author>
+            </title-info>
+          </description>
+          <body><section>\(body)</section></body>
+          <binary id="cover.jpg" content-type="image/jpeg">\(String(repeating: "R0lGODlhAQAB", count: 40))</binary>
+        </FictionBook>
+        """
+    }
+
+    static func makeFB2(at url: URL, title: String, firstName: String,
+                        lastName: String, paragraphs: [String]) throws {
+        try Data(fictionBookXML(title: title, firstName: firstName,
+                                lastName: lastName, paragraphs: paragraphs).utf8).write(to: url)
+    }
+
+    /// Un FBZ : le même FB2, dans une archive ZIP.
+    static func makeFBZ(at url: URL, title: String, firstName: String,
+                        lastName: String, paragraphs: [String]) throws {
+        try writeZIP(at: url, files: [
+            ("livre.fb2", fictionBookXML(title: title, firstName: firstName,
+                                         lastName: lastName, paragraphs: paragraphs)),
+        ])
+    }
+
+    /// Un ODT minimal : `content.xml` et son `mimetype` OpenDocument.
+    static func makeODT(at url: URL, paragraphs: [String]) throws {
+        let body = paragraphs
+            .map { "<text:p text:style-name=\"Standard\">\($0)</text:p>" }
+            .joined()
+        let content = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <office:document-content
+            xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+            xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+          <office:body><office:text>\(body)</office:text></office:body>
+        </office:document-content>
+        """
+        try writeZIP(at: url, files: [
+            ("mimetype", "application/vnd.oasis.opendocument.text"),
+            ("content.xml", content),
+        ])
+    }
+
     static func writeZIP(at url: URL, files: [(String, String)]) throws {
         let archive = try Archive(url: url, accessMode: .create)
         for (path, content) in files {
@@ -368,6 +425,101 @@ struct OfficeDocumentTests {
         #expect(text.contains("Par Wilfrid Sellars."))
         #expect(!text.contains("color: red"))
         #expect(!text.contains("var x"))
+    }
+}
+
+// MARK: - FictionBook et OpenDocument
+
+@Suite("Formats — FB2, FBZ, ODT")
+struct FictionBookAndODTTests {
+    @Test func fb2TexteEtFiche() throws {
+        let directory = try FormatFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let url = directory.appendingPathComponent("roman.fb2")
+        try FormatFixtures.makeFB2(
+            at: url, title: "Récits de la Kolyma", firstName: "Varlam",
+            lastName: "Chalamov",
+            paragraphs: ["La taïga blanche.", "Le froid tenait lieu de loi."])
+
+        let text = try #require(OfficeDocument.fictionBookText(url, zipped: false))
+        #expect(text.contains("La taïga blanche."))
+        #expect(text.contains("Le froid tenait lieu de loi."))
+        // Les images en base64 ne doivent jamais entrer dans l'index.
+        #expect(!text.contains("R0lGODlhAQAB"))
+
+        let info = try #require(OfficeDocument.fictionBookMetadata(url, zipped: false))
+        #expect(info.title == "Récits de la Kolyma")
+        #expect(info.author == "Varlam Chalamov")
+    }
+
+    @Test func fbzEstUnFb2DansUneArchive() throws {
+        let directory = try FormatFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let url = directory.appendingPathComponent("roman.fbz")
+        try FormatFixtures.makeFBZ(
+            at: url, title: "Récits de la Kolyma", firstName: "Varlam",
+            lastName: "Chalamov", paragraphs: ["La taïga blanche."])
+
+        let text = try #require(OfficeDocument.fictionBookText(url, zipped: true))
+        #expect(text.contains("La taïga blanche."))
+        #expect(!text.contains("R0lGODlhAQAB"))
+
+        let info = try #require(OfficeDocument.fictionBookMetadata(url, zipped: true))
+        #expect(info.author == "Varlam Chalamov")
+    }
+
+    @Test func odtRenduEnTexte() throws {
+        let directory = try FormatFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let url = directory.appendingPathComponent("these.odt")
+        try FormatFixtures.makeODT(
+            at: url, paragraphs: ["Premier paragraphe.", "Second paragraphe."])
+
+        let text = try #require(OfficeDocument.odtText(url))
+        #expect(text.contains("Premier paragraphe."))
+        #expect(text.contains("Second paragraphe."))
+        // Les paragraphes restent séparés : c'est sur eux que la pagination coupe.
+        #expect(text.contains("\n\n"))
+    }
+
+    /// Le chemin complet : ce que le pipeline d'indexation appellera vraiment.
+    @Test func lExtracteurLesPrendEnCharge() throws {
+        let directory = try FormatFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fb2 = directory.appendingPathComponent("a.fb2")
+        try FormatFixtures.makeFB2(at: fb2, title: "T", firstName: "P", lastName: "N",
+                                   paragraphs: ["Du texte à indexer."])
+        let fbz = directory.appendingPathComponent("b.fbz")
+        try FormatFixtures.makeFBZ(at: fbz, title: "T", firstName: "P", lastName: "N",
+                                   paragraphs: ["Du texte à indexer."])
+        let odt = directory.appendingPathComponent("c.odt")
+        try FormatFixtures.makeODT(at: odt, paragraphs: ["Du texte à indexer."])
+
+        for (url, format) in [(fb2, DocumentFormat.fb2), (fbz, .fbz), (odt, .odt)] {
+            let extracted = try #require(TextExtractor.extract(fileURL: url, format: format),
+                                         "\(format) doit rendre du texte")
+            #expect(extracted.pages.first?.content.contains("Du texte à indexer.") == true)
+            #expect(extracted.needsOCR == false)
+        }
+    }
+
+    /// Le scan doit reconnaître ces trois-là au contenu comme au nom.
+    @Test func leScanLesReconnait() throws {
+        let directory = try FormatFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fb2 = directory.appendingPathComponent("a.fb2")
+        try FormatFixtures.makeFB2(at: fb2, title: "T", firstName: "P", lastName: "N",
+                                   paragraphs: ["x"])
+        let odt = directory.appendingPathComponent("c.odt")
+        try FormatFixtures.makeODT(at: odt, paragraphs: ["x"])
+
+        #expect(FormatDetector.resolve(fileURL: fb2) == .fb2)
+        #expect(FormatDetector.resolve(fileURL: odt) == .odt)
     }
 }
 
