@@ -198,8 +198,9 @@ instantané lisible sans Ishtar :
   ```
   { "version": 1, "generatedAt": "<ISO 8601>", "library": "<nom du dossier>",
     "fonds": { "id": "aj", "nom": "aj" }?,
-    "editions": [ { "key", "title", "subtitle"?, "authors": [..],
-                    "year"?, "editionYear"?, "publisher"?, "language"?,
+    "editions": [ { "key", "work", "title", "subtitle"?, "authors": [..],
+                    "people"?: [ { "name", "sortName"?, "idref"?, "bnf"?, "wikidata"? } ],
+                    "kind"?, "year"?, "editionYear"?, "publisher"?, "language"?,
                     "isbn13"?, "doi"?, "discipline"?, "collections": [..],
                     "status", "confidence", "dateAdded",
                     "files": [ { "sha256", "path", "format", "size" } ] } ] }
@@ -208,6 +209,25 @@ instantané lisible sans Ishtar :
   de l'œuvre ; `editionYear` n'apparaît que si elle en diffère. `fonds`
   (facultatif, `--fonds`) dit de qui vient la bibliothèque : un site qui
   réunit plusieurs publications peut ainsi montrer chaque fonds à part.
+  Trois champs dont les lecteurs dépendent (audit du 03/10, D9) :
+  - `work` — toujours présent : l'identifiant de l'œuvre (UUID d'Ishtar).
+    Les éditions et les formats d'une même œuvre ne font qu'une carte dans
+    Rayons ; le Bibliothécaire regroupe par lui ses œuvres et sa recherche.
+  - `kind` — `livre` ou `article` (chapitres et communications compris),
+    calculé à la publication (règle d'identification n° 13).
+  - `people` — les auteurs, avec leur forme de classement (`sortName`,
+    « Adorno, Theodor W. ») et leurs seules notices d'autorité **confirmées**
+    (`idref` : PPN ; `bnf` : `ark:/12148/…` ; `wikidata` : `Q…`) ; absent
+    quand l'œuvre n'a pas d'auteur.
+
+  **Le contrat fait foi** : il est décrit et tenu hors de ce dépôt, avec les
+  services qui lisent le catalogue (dépôt `_PONTS`, `contrats/`). Son
+  vérificateur est copié à l'identique dans `contrats/catalogue-publie.mjs`
+  (ne pas le modifier ici : le recopier depuis sa source) ; le test
+  `CatalogueContratTests` publie un petit catalogue et le lui soumet. Une
+  évolution se fait en v2, jamais en silence : un champ facultatif nouveau
+  reste dans la v1 ; un champ requis ou un sens changé fait une v2, et les
+  lecteurs s'adaptent d'abord.
 - `covers/<sha256>.png` — les vignettes d'Ishtar, par empreinte de fichier.
 - `catalog.sqlite` — copie de ce schéma **réduite aux documents publiés**
   (textes extraits compris) ; les conversations du démon en sont retirées.
