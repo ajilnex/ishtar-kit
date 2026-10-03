@@ -46,12 +46,17 @@ public struct Ingestor: Sendable {
     public init() {}
 
     /// L'entonnoir mécanique (étages 1-2) : nom de fichier puis métadonnées
-    /// embarquées. Pur, local, sans réseau, sans écriture.
+    /// embarquées — la fiche Calibre posée à côté du livre passant avant tout.
+    /// Pur, local, sans réseau, sans écriture.
     public static func mechanicalGuess(fileName: String, fileURL: URL,
                                         format: DocumentFormat) -> MetadataGuess {
         var guess = FilenameParser.parse(fileName: fileName)
-        if guess.confidence == .fallback,
-           let embedded = EmbeddedMetadata.read(fileURL: fileURL, format: format)
+        // La fiche d'une bibliothèque Calibre, relue par son propriétaire, passe
+        // avant le nom de fichier (WP-34 : les fonds confiés) ; à défaut, les
+        // métadonnées embarquées, quand le nom ne dit rien de sûr.
+        let calibre = EmbeddedMetadata.readCalibreSidecar(for: fileURL).flatMap { $0.title.isEmpty ? nil : $0 }
+        if let embedded = calibre
+            ?? (guess.confidence == .fallback ? EmbeddedMetadata.read(fileURL: fileURL, format: format) : nil)
         {
             if embedded.title.isEmpty {
                 // Pas de titre embarqué : on garde le titre de repli du nom

@@ -114,7 +114,12 @@ public enum EmbeddedMetadata {
               let opfXML = extract(from: archive, path: opfPath),
               let opf = try? XMLDocument(data: opfXML)
         else { return nil }
+        return guess(fromOPF: opf)
+    }
 
+    /// Le Dublin Core d'un OPF : celui d'un EPUB, ou la fiche d'une
+    /// bibliothèque Calibre.
+    static func guess(fromOPF opf: XMLDocument) -> MetadataGuess? {
         func dc(_ element: String) -> String? {
             let nodes = (try? opf.nodes(forXPath: "//*[local-name()='\(element)']")) ?? []
             return nodes.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -124,7 +129,7 @@ public enum EmbeddedMetadata {
         let author = sanitizedAuthor(dc("creator"))
         let year = dc("date").flatMap { MetadataPatterns.year(in: $0) }
         let publisher = dc("publisher")
-        let language = dc("language").map { String($0.prefix(2)).lowercased() }
+        let language = dc("language").map(languageCode)
 
         // L'ISBN peut se trouver dans n'importe quel dc:identifier.
         let identifiers = (try? opf.nodes(forXPath: "//*[local-name()='identifier']")) ?? []
@@ -143,6 +148,36 @@ public enum EmbeddedMetadata {
             isbn13: isbn13,
             confidence: .structured
         )
+    }
+
+    /// ISO 639-1 (« fr ») d'un code de langue OPF, qui vient souvent en trois
+    /// lettres (Calibre : « fra », « spa ») ou avec sa région (« fr-FR »).
+    static func languageCode(_ raw: String) -> String {
+        let code = raw.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? ""
+        let threeLetters = ["fra": "fr", "fre": "fr", "eng": "en", "deu": "de", "ger": "de", "ita": "it", "spa": "es",
+                            "por": "pt", "rus": "ru", "lat": "la", "ell": "el", "gre": "el", "nld": "nl", "dut": "nl",
+                            "pol": "pl", "ces": "cs", "cze": "cs", "jpn": "ja", "zho": "zh", "chi": "zh", "ara": "ar",
+                            "heb": "he", "cat": "ca", "swe": "sv", "dan": "da", "nor": "no", "fin": "fi", "hun": "hu",
+                            "tur": "tr", "ukr": "uk", "ron": "ro", "rum": "ro"]
+        return threeLetters[code] ?? String(code.prefix(2))
+    }
+
+    // MARK: - Fiche Calibre
+
+    /// La fiche qu'une bibliothèque Calibre pose à côté du livre
+    /// (`metadata.opf`, le Dublin Core d'un OPF) : relue par son propriétaire,
+    /// elle vaut mieux que le nom de fichier (« Titre - Auteur », la convention
+    /// de Calibre, qui se lit à l'envers). Un dossier Calibre ne contient qu'un
+    /// livre, en un ou plusieurs formats : ailleurs, la fiche n'est pas lue.
+    public static func readCalibreSidecar(for fileURL: URL) -> MetadataGuess? {
+        let folder = fileURL.deletingLastPathComponent()
+        let sidecar = folder.appendingPathComponent("metadata.opf")
+        guard let data = try? Data(contentsOf: sidecar),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return nil }
+        let books = Set(names.filter { !$0.hasPrefix(".") && DocumentFormat(fileExtension: ($0 as NSString).pathExtension) != nil }
+            .map { ($0 as NSString).deletingPathExtension })
+        guard books.count == 1, let opf = try? XMLDocument(data: data) else { return nil }
+        return guess(fromOPF: opf)
     }
 
     private static func extract(from archive: Archive, path: String) -> Data? {

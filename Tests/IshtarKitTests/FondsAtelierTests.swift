@@ -121,6 +121,59 @@ struct FondsAtelierTests {
         #expect(try FondsAtelier.depot(in: fonds) == FondsAtelier.Depot(id: "yahor", nom: "Le fonds de Yahor", etat: "recu"))
     }
 
+    /// La fiche qu'écrit Calibre à côté de chaque livre.
+    private let calibreOPF = """
+        <?xml version='1.0' encoding='utf-8'?>
+        <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uuid_id" version="2.0">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+            <dc:identifier opf:scheme="calibre" id="calibre_id">12</dc:identifier>
+            <dc:identifier opf:scheme="uuid" id="uuid_id">1b9e2c41-77aa-4f0e-9d2b-5c3e1e0b7a11</dc:identifier>
+            <dc:title>La logique</dc:title>
+            <dc:creator opf:file-as="Wagner, Pierre" opf:role="aut">Pierre Wagner</dc:creator>
+            <dc:contributor opf:file-as="calibre" opf:role="bkp">calibre (6.0.0) [https://calibre-ebook.com]</dc:contributor>
+            <dc:date>2007-02-14T23:00:00+00:00</dc:date>
+            <dc:publisher>Presses universitaires de France</dc:publisher>
+            <dc:identifier opf:scheme="ISBN">9782130557640</dc:identifier>
+            <dc:language>fra</dc:language>
+          </metadata>
+        </package>
+        """
+
+    @Test("Une fiche Calibre passe avant le nom de fichier et les métadonnées embarquées ; ailleurs, elle n'est pas lue")
+    func calibreSidecar() throws {
+        let racine = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: racine) }
+        let dossier = racine.appendingPathComponent("Pierre Wagner/La logique (12)")
+        let livre = dossier.appendingPathComponent("La logique - Pierre Wagner.epub")
+        try FileManager.default.createDirectory(at: dossier, withIntermediateDirectories: true)
+        try Fixtures.makeEPUB(at: livre, title: "Titre embarqué", author: "Auteur embarqué", year: "1999", isbn13: nil)
+        try write(calibreOPF, to: dossier.appendingPathComponent("metadata.opf"))
+        try write("jpeg", to: dossier.appendingPathComponent("cover.jpg"))
+        // Le même livre en deux formats : toujours un seul livre.
+        try write("Le texte.", to: dossier.appendingPathComponent("La logique - Pierre Wagner.txt"))
+
+        let guess = Ingestor.mechanicalGuess(fileName: livre.lastPathComponent, fileURL: livre, format: .epub)
+        #expect(guess.title == "La logique")
+        #expect(guess.author == "Pierre Wagner")
+        #expect(guess.year == "2007")
+        #expect(guess.isbn13 == "9782130557640")
+        #expect(guess.language == "fr")
+        #expect(guess.publisher == "Presses universitaires de France")
+        #expect(guess.confidence == .structured)
+
+        // Deux livres différents dans le dossier : la fiche ne dit pas lequel.
+        try write("Un autre.", to: dossier.appendingPathComponent("Autre livre.txt"))
+        #expect(EmbeddedMetadata.readCalibreSidecar(for: livre) == nil)
+    }
+
+    @Test("Les codes de langue des OPF : trois lettres, région")
+    func languageCodes() {
+        #expect(EmbeddedMetadata.languageCode("spa") == "es")
+        #expect(EmbeddedMetadata.languageCode("ger") == "de")
+        #expect(EmbeddedMetadata.languageCode("fr-FR") == "fr")
+        #expect(EmbeddedMetadata.languageCode("EN") == "en")
+    }
+
     /// Une édition, un document, sa clé.
     private func add(_ db: CatalogDatabase, title: String, author: String, year: String, hash: String,
                      isbn13: String? = nil) async throws -> UUID {
