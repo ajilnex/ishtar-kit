@@ -230,6 +230,11 @@ struct FileLabelTests {
         #expect(FileLabel.name(families: ["Deleuze"], title: "Qu'est-ce que la philosophie ?", year: "1991", ext: "epub") == "Deleuze — Qu'est-ce que la philosophie (1991).epub")
         #expect(FileLabel.name(families: ["Adorno"], title: "Minima moralia", year: "1951", editionYear: "2003", ext: "pdf", copy: 2) == "Adorno — Minima moralia (1951, éd. 2003) [2].pdf")
         #expect(FileLabel.family(ofName: "Simone de Beauvoir", sortName: "Beauvoir, Simone de") == "Beauvoir")
+        // Sans forme de classement (un fonds confié, nommé par son donateur) : la
+        // particule en capitale reste au nom, même seule devant lui (03/10).
+        #expect(FileLabel.family(ofName: "Ursula K. Le Guin", sortName: nil) == "Le Guin")
+        #expect(FileLabel.family(ofName: "Le Guin", sortName: nil) == "Le Guin")
+        #expect(FileLabel.family(ofName: "Michel de Montaigne", sortName: nil) == "Montaigne")
     }
 
     @Test("L'étiquette se relit")
