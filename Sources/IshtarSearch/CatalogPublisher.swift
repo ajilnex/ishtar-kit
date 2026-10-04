@@ -34,6 +34,10 @@ public struct PublishedFonds: Codable, Sendable, Equatable {
 
 public struct PublishedEdition: Codable, Sendable, Equatable {
     public var key: String
+    /// Les anciennes clés de cette édition (pierres tombales) : retirées parce
+    /// qu'elles ne disaient plus ce que dit la fiche, elles y mènent encore
+    /// (liens de partage, citations anciennes). Absent s'il n'y en a pas.
+    public var formerKeys: [String]?
     public var title: String
     public var subtitle: String?
     public var authors: [String]
@@ -98,10 +102,15 @@ public struct PublicationRules: Sendable, Equatable {
     public var excludedFolders: [String]
     /// Préfixes de titre d'œuvre écartés (fiches en attente de tri, par exemple).
     public var excludedTitlePrefixes: [String]
+    /// Ne publier que les fichiers vérifiés sur pièces, pour les octets lus
+    /// (garde du 04/10/2026 : un livre n'entre dans Rayons qu'après la lecture
+    /// de ses premières pages).
+    public var requireVerification: Bool
 
-    public init(excludedFolders: [String] = [], excludedTitlePrefixes: [String] = []) {
+    public init(excludedFolders: [String] = [], excludedTitlePrefixes: [String] = [], requireVerification: Bool = false) {
         self.excludedFolders = excludedFolders.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
         self.excludedTitlePrefixes = excludedTitlePrefixes
+        self.requireVerification = requireVerification
     }
 
     func excludes(relativePath: String) -> Bool {
@@ -123,6 +132,8 @@ public struct PublicationReport: Sendable, Equatable {
     public var covers = 0
     public var excludedByRule = 0
     public var excludedMissingOrIgnored = 0
+    /// Fichiers retenus faute de vérification sur pièces (garde active).
+    public var excludedUnverified = 0
     /// Vrai si le manifeste existant disait déjà la même chose : il n'a pas
     /// été réécrit (rien à transporter, rien à recharger côté serveur).
     public var unchanged = false
@@ -191,6 +202,9 @@ public struct CatalogPublisher: Sendable {
                       now: Date = Date()) async throws -> (PublishedCatalogue, PublicationReport) {
         let rootPath = URL(fileURLWithPath: root).standardizedFileURL.path
         let rows = try await LibraryOverview(db: db).rows()
+        let store = CatalogStore(db: db)
+        let formerKeys = try await store.retiredKeysByEdition()
+        let verified = rules.requireVerification ? try await store.verifiedHashes() : [:]
 
         let (keys, collectionPaths, people, kinds) = try await db.pool.read { conn -> ([UUID: String], [UUID: [String]], [UUID: [PublishedPerson]], [UUID: DocumentKind]) in
             // Le genre de chaque document (partagé avec l'application).
@@ -245,6 +259,10 @@ public struct CatalogPublisher: Sendable {
                 report.excludedByRule += 1
                 continue
             }
+            if rules.requireVerification, verified[document.id]?.lowercased() != hash.lowercased() {
+                report.excludedUnverified += 1
+                continue
+            }
             guard seenHashes.insert(hash).inserted, let key = keys[edition.id] else { continue }
 
             let file = PublishedFile(sha256: hash, path: relative,
@@ -256,6 +274,7 @@ public struct CatalogPublisher: Sendable {
             let workYear = row.work.date
             editions[edition.id] = PublishedEdition(
                 key: key,
+                formerKeys: formerKeys[edition.id].flatMap { $0.isEmpty ? nil : $0 },
                 title: edition.title ?? row.work.title,
                 subtitle: row.work.subtitle,
                 authors: row.authors,

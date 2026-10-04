@@ -14,7 +14,7 @@ struct IshtarCLI: AsyncParsableCommand {
         version: "0.2.0",
         subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
                       Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Reunir.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self, Doublons.self, Exporter.self, Annotations.self]
+                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Reunir.self, Ranger.self, Verifier.self, Corriger.self, Attester.self, Cles.self, Auteurs.self, Titres.self, Prenoms.self, Doublons.self, Exporter.self, Annotations.self]
     )
 }
 
@@ -486,11 +486,15 @@ struct Publish: AsyncParsableCommand {
     @Flag(name: .long, help: "Construit et résume sans rien écrire.")
     var dryRun = false
 
+    @Flag(name: .long, help: "Ne publie que les fichiers vérifiés sur pièces (ishtar attester, corriger --sur-pieces).")
+    var exigerVerification = false
+
     func run() async throws {
         let database = try CatalogDatabase(at: db)
         // Un catalogue antérieur à la v7 n'a pas encore de clés.
         try await CatalogStore(db: database).assignMissingKeys()
-        let rules = PublicationRules(excludedFolders: exclude, excludedTitlePrefixes: excludeTitlePrefix)
+        let rules = PublicationRules(excludedFolders: exclude, excludedTitlePrefixes: excludeTitlePrefix,
+                                     requireVerification: exigerVerification)
         let publisher = CatalogPublisher(db: database)
         let provenance = fonds.map { PublishedFonds(id: $0, nom: fondsNom ?? $0) }
 
@@ -513,6 +517,7 @@ struct Publish: AsyncParsableCommand {
         if corpus { print("Corpus (écrits)          \(report.corpusWritten)") }
         print("Écartés par les règles   \(report.excludedByRule)")
         print("Introuvables ou ignorés  \(report.excludedMissingOrIgnored)")
+        if exigerVerification { print("Non vérifiés (retenus)   \(report.excludedUnverified)") }
     }
 }
 
@@ -935,6 +940,12 @@ struct Corriger: AsyncParsableCommand {
         let isbn: String?
         let langue: String?
         let preuve: String?
+        /// Le sous-titre, à part du titre (RDA : complément du titre).
+        let sousTitre: String?
+        /// Qui a lu les pages (« Codex + Claude ») ; défaut : `--par`.
+        let lecteurs: String?
+        /// L'empreinte du fichier dont les pages ont été lues.
+        let sha256: String?
     }
 
     @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
@@ -948,6 +959,9 @@ struct Corriger: AsyncParsableCommand {
 
     @Flag(name: .long, help: "Correction faite par un humain : la fiche passe en confiance haute (sinon elle reste « probable », et les passes automatiques pourront la reprendre).")
     var humain = false
+
+    @Flag(name: .long, help: "Correction vérifiée sur pièces par deux lecteurs : inscrite comme vérification (preuve exigée), la fiche passe en confiance haute.")
+    var surPieces = false
 
     @Flag(name: .long, help: "Écrit les corrections (sinon : seulement vérifier qu'on trouve chaque fichier).")
     var appliquer = false
@@ -987,18 +1001,130 @@ struct Corriger: AsyncParsableCommand {
             }
             guard let titre = c.titre, let auteurs = c.auteurs else { print("   titre ou auteurs manquants"); continue }
             print("\(c.fichier)\n   → \(auteurs.joined(separator: " ; ")) — \(titre) (\(c.annee ?? "s.d."))")
+            if surPieces, (c.preuve ?? "").trimmingCharacters(in: .whitespaces).isEmpty { print("   preuve manquante : rien d'écrit"); continue }
             guard appliquer else { continue }
             try await store.applyUserEdit(workId: target.workId, editionId: target.editionId, documentId: target.documentId,
                                           edit: RecordEdit(title: titre, authors: auteurs, year: c.edition ?? c.annee,
                                                            publisher: c.editeur, language: c.langue, isbn13: c.isbn))
-            let note = "Vérifié sur pièce le \(day) (\(par))" + (c.preuve.map { " : \($0)" } ?? ".")
+            if let sousTitre = c.sousTitre { try await store.setSubtitle(sousTitre.isEmpty ? nil : sousTitre, forWork: target.workId) }
+            if let editionId = target.editionId { try await store.setEditionTitleIfPresent(titre, forEdition: editionId) }
+            let note = "Vérifié sur pièce le \(day) (\(c.lecteurs ?? par))" + (c.preuve.map { " : \($0)" } ?? ".")
             try await store.annotateWork(target.workId, date: c.annee, note: note)
-            if !humain {
-                try await store.lowerToProbable(workId: target.workId, editionId: target.editionId, documentId: target.documentId)
+            if surPieces {
+                try await store.recordVerification(documentId: target.documentId, readers: c.lecteurs ?? par,
+                                                   proof: c.preuve ?? "", expectedHash: c.sha256)
+            } else {
+                // Une fiche changée sans lecture des pages perd sa vérification.
+                try await store.clearVerification(documentId: target.documentId)
+                if !humain {
+                    try await store.lowerToProbable(workId: target.workId, editionId: target.editionId, documentId: target.documentId)
+                }
             }
             done += 1
         }
         if appliquer { print("\(done) fiches corrigées.") }
+    }
+}
+
+// MARK: - Attester (fiches justes, vérifiées sur pièces)
+
+struct Attester: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Inscrit la vérification sur pièces de fichiers dont la fiche est juste (JSON : fichier, sha256, lecteurs, preuve). La fiche passe en confiance haute."
+    )
+
+    struct Entree: Decodable {
+        let fichier: String
+        let sha256: String?
+        let lecteurs: String?
+        let preuve: String
+    }
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Fichier JSON des attestations.")
+    var fichier: String
+
+    @Option(name: .long, help: "Qui a lu (défaut des entrées sans « lecteurs »).")
+    var par: String = "Codex + Claude, à la demande d'Aubin"
+
+    @Flag(name: .long, help: "Écrit (sinon : seulement vérifier qu'on trouve chaque fichier, avec la bonne empreinte).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let store = CatalogStore(db: database)
+        let entrees = try JSONDecoder().decode([Entree].self, from: Data(contentsOf: URL(fileURLWithPath: fichier)))
+        var faits = 0, refus = 0
+        for e in entrees {
+            guard let target = try await store.document(named: e.fichier) else {
+                print("introuvable ou ambigu : \(e.fichier)"); refus += 1; continue
+            }
+            if let sha = e.sha256 {
+                let actual = try await database.pool.read { try String.fetchOne($0, sql: "SELECT contentHash FROM document WHERE id = ?", arguments: [target.documentId]) }
+                guard actual?.lowercased() == sha.lowercased() else { print("empreinte différente : \(e.fichier)"); refus += 1; continue }
+            }
+            guard appliquer else { continue }
+            try await store.recordVerification(documentId: target.documentId, readers: e.lecteurs ?? par, proof: e.preuve, expectedHash: e.sha256)
+            faits += 1
+        }
+        print(appliquer ? "\(faits) fichiers attestés, \(refus) refusés." : "\(entrees.count - refus) fichiers trouvés, \(refus) refusés (essai à blanc).")
+    }
+}
+
+// MARK: - Clés justes (pierres tombales)
+
+struct Cles: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Remplace les clés qui ne disent plus ce que dit leur fiche ; l'ancienne devient une pierre tombale qui mène à la nouvelle."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Dossier dont les éditions ne sont pas touchées (répétable) : espaces de travail.")
+    var exclure: [String] = []
+
+    @Option(name: .long, help: "Ne traiter que ces clés (répétable).")
+    var cle: [String] = []
+
+    @Option(name: .long, help: "Raison inscrite sur les pierres tombales.")
+    var raison: String = "fiche vérifiée sur pièces"
+
+    @Option(name: .long, help: "Journal JSON des remplacements (ancienne, nouvelle).")
+    var journal: String?
+
+    @Flag(name: .long, help: "Écrit (sinon : montre ce qui changerait).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let store = CatalogStore(db: database)
+        var fausses = try await store.disagreeingKeys()
+        if !cle.isEmpty {
+            let voulues = Set(cle.map { $0.lowercased() })
+            fausses = fausses.filter { voulues.contains($0.key.lowercased()) }
+        }
+        if !exclure.isEmpty {
+            // Une édition dont tous les fichiers sont dans un dossier exclu ne bouge pas.
+            let horsChamp = try await database.pool.read { conn in
+                Set(try UUID.fetchAll(conn, sql: "SELECT DISTINCT editionId FROM document WHERE editionId IS NOT NULL AND isMissing = 0")
+                    .filter { id in
+                        let paths = try String.fetchAll(conn, sql: "SELECT filePath FROM document WHERE editionId = ? AND isMissing = 0", arguments: [id])
+                        return !paths.isEmpty && paths.allSatisfy { p in exclure.contains { p.contains("/\($0)/") } }
+                    })
+            }
+            fausses = fausses.filter { !horsChamp.contains($0.editionId) }
+        }
+        let changes = try await store.replaceKeys(editionIds: fausses.map(\.editionId), reason: raison, dryRun: !appliquer)
+        for c in changes { print("\(c.old)  →  \(c.new)\(c.retired ? "" : "  (provisoire)")") }
+        print(String(repeating: "─", count: 60))
+        print("\(changes.count) clés \(appliquer ? "remplacées" : "à remplacer (essai à blanc)"), dont \(changes.filter(\.retired).count) pierres tombales.")
+        if let journal {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            try encoder.encode(changes).write(to: URL(fileURLWithPath: journal))
+        }
     }
 }
 

@@ -80,12 +80,42 @@ public enum CiteKeyGenerator {
         return first.uppercased() + (shouting ? rest.lowercased() : String(rest))
     }
 
-    /// Nom de famille : le dernier mot séparé par des espaces, entier — un nom
-    /// composé à trait d'union (« De-Tienne », « Merleau-Ponty ») reste d'un
-    /// seul tenant.
-    static func family(_ author: String) -> String? {
-        guard let last = author.split(whereSeparator: \.isWhitespace).last else { return nil }
-        let parts = words(String(last))
+    /// Particules qui, en capitale, font partie du nom (« Ursula K. Le Guin »,
+    /// « André De Tienne ») — en minuscule, non (« Michel de Montaigne »).
+    /// La même règle que l'étiquette des fichiers (`FileLabel.family`).
+    static let capitalParticles: Set<String> = ["De", "Van", "Le", "La", "Du", "Di", "Da", "Del", "Des", "Von", "Ten", "Ter"]
+
+    /// Articles d'une épithète, en minuscule (« Pline le Jeune », « Ivan der Schreckliche »).
+    static let epithetArticles: Set<String> = ["le", "la", "les", "the", "der", "die", "das", "il", "lo", "el"]
+
+    /// Nom de famille. La forme de classement fait foi quand elle existe
+    /// (« Pline le Jeune » → `PlineLeJeune`, « Sun Tzu » → `SunTzu`,
+    /// « Viveiros de Castro, Eduardo » → `ViveirosDeCastro`) : sans elle, une
+    /// épithète passait pour un nom (`Jeune100Lettres`, 04/10). Sinon, le
+    /// dernier mot séparé par des espaces, entier — un nom composé à trait
+    /// d'union (« De-Tienne », « Merleau-Ponty ») reste d'un seul tenant — avec
+    /// sa particule en capitale.
+    static func family(_ author: String, sortName: String? = nil) -> String? {
+        if let sortName, let head = sortName.components(separatedBy: ",").first,
+           !head.trimmingCharacters(in: .whitespaces).isEmpty {
+            let parts = words(head)
+            if !parts.isEmpty { return parts.map(capitalized).joined() }
+        }
+        let tokens = author.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let last = tokens.last else { return nil }
+        var name = last
+        let n = tokens.count
+        if n >= 2, capitalParticles.contains(tokens[n - 2]) { name = tokens[n - 2] + " " + last }
+        // Une épithète n'est pas un nom de famille : « Pline le Jeune », « Pline
+        // l'Ancien », « Alexandre le Grand » se citent en entier — sauf derrière
+        // une particule (« Jean de la Bruyère » → `LaBruyere`).
+        let isArticle = { (w: String) in epithetArticles.contains(w) }
+        if n >= 3, isArticle(tokens[n - 2]) {
+            name = ["de", "du", "des", "d'", "d’"].contains(tokens[n - 3]) ? tokens[n - 2] + " " + last : tokens.joined(separator: " ")
+        } else if n >= 2, last.hasPrefix("l'") || last.hasPrefix("l’") {
+            name = tokens.joined(separator: " ")
+        }
+        let parts = words(name)
         guard !parts.isEmpty else { return nil }
         return parts.map(capitalized).joined()
     }
@@ -111,9 +141,9 @@ public enum CiteKeyGenerator {
     }
 
     /// La clé de base, sans désambiguïsation.
-    public static func base(author: String?, year yearValue: String?, title: String) -> String {
-        let family = author.flatMap(family) ?? "Anon"
-        return family + (year(yearValue) ?? "ND") + (titleWords(title).first ?? "")
+    public static func base(author: String?, sortName: String? = nil, year yearValue: String?, title: String) -> String {
+        let name = author.flatMap { family($0, sortName: sortName) } ?? "Anon"
+        return name + (year(yearValue) ?? "ND") + (titleWords(title).first ?? "")
     }
 
     /// Chiffre romain de tome ou de partie (i à xxxix) : « Tome II ».
@@ -208,14 +238,19 @@ extension EditionKey {
     /// ressort avec sa clé.
     @discardableResult
     public static func assignMissing(_ db: Database, now: Date = Date()) throws -> Int {
-        var taken = Set(try String.fetchAll(db, sql: "SELECT key FROM edition_key"))
+        // Une clé retirée n'est jamais redonnée : elle renvoie pour toujours à
+        // son édition (pierre tombale).
+        var taken = Set(try String.fetchAll(db, sql: "SELECT key FROM edition_key UNION ALL SELECT key FROM edition_key_retired"))
 
         let rows = try Row.fetchAll(db, sql: """
             SELECT e.id AS editionId, e.workId AS workId, e.year AS editionYear, w.date AS workDate, w.title AS title,
                    e.language AS language, w.originalLanguage AS originalLanguage,
                    (SELECT c.name FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
                      WHERE wc.workId = w.id
-                     ORDER BY (wc.role = 'author') DESC, wc.position LIMIT 1) AS author
+                     ORDER BY (wc.role = 'author') DESC, wc.position LIMIT 1) AS author,
+                   (SELECT c.sortName FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
+                     WHERE wc.workId = w.id
+                     ORDER BY (wc.role = 'author') DESC, wc.position LIMIT 1) AS sortName
             FROM edition e
             JOIN work w ON w.id = e.workId
             WHERE e.id NOT IN (SELECT editionId FROM edition_key)
@@ -243,7 +278,7 @@ extension EditionKey {
             // Année de l'œuvre si connue ; à défaut, celle que porte l'édition
             // (qui, importée d'un nom de fichier, EST l'année de l'œuvre).
             let original = workDate ?? editionYear
-            let base = CiteKeyGenerator.base(author: author, year: original, title: title)
+            let base = CiteKeyGenerator.base(author: author, sortName: row["sortName"], year: original, title: title)
             // L'année d'édition ne départage que si elle diffère de l'originale.
             let distinctEditionYear = (workDate != nil && editionYear != workDate) ? editionYear : nil
             // À base égale, la clé nue va d'abord à l'édition sans année propre ;
@@ -369,6 +404,129 @@ extension CatalogStore {
                 throw CiteKeyError.taken(clean)
             }
             try EditionKey(editionId: editionId, key: clean, origin: .manual).save(conn)
+        }
+    }
+}
+
+// MARK: - Clés justes (04/10/2026)
+
+extension CiteKeyGenerator {
+    /// Une clé est juste si elle dit ce que dit la fiche : sa base (famille,
+    /// année, premier mot du titre), suivie au plus d'un mot du titre qui la
+    /// distingue (`Rosenberg2007WilfridFusing`, `Long1987HellenisticVolume1`),
+    /// puis d'un suffixe d'édition (`-2003`, `-en`, `-b`). La casse est ignorée.
+    public static func agrees(key: String, author: String?, sortName: String?, year: String?, title: String) -> Bool {
+        let stem = String(key.split(separator: "-", maxSplits: 1).first ?? Substring(key)).lowercased()
+        let expected = base(author: author, sortName: sortName, year: year, title: title).lowercased()
+        guard stem.hasPrefix(expected) else { return false }
+        let rest = String(stem.dropFirst(expected.count))
+        if rest.isEmpty { return true }
+        let words = titleWords(title).map { $0.lowercased() }
+        for i in words.indices.dropFirst() {
+            if rest == words[i] { return true }
+            if i + 1 < words.count, rest == words[i] + words[i + 1] { return true }
+        }
+        return false
+    }
+}
+
+extension EditionKey {
+    /// Une clé qui ne dit plus ce que dit sa fiche.
+    public struct Disagreement: Sendable, Equatable {
+        public let editionId: UUID
+        public let key: String
+        public let origin: Origin
+        /// La base que donnerait la fiche d'aujourd'hui.
+        public let expected: String
+    }
+
+    /// Un remplacement : l'ancienne clé, devenue pierre tombale, et la nouvelle.
+    public struct Change: Sendable, Equatable, Codable {
+        public let editionId: UUID
+        public let old: String
+        public let new: String
+        /// Vrai : l'ancienne avait pu sortir (figée) et reste une pierre tombale.
+        public let retired: Bool
+    }
+
+    /// Les clés (hors clés manuelles) qui ne disent plus ce que dit leur fiche
+    /// — auteur, année ou premier mot du titre (« Jeune100Lettres » pour Pline le
+    /// Jeune, « Kiryushchenko1974Diagrams » pour un livre de 2023).
+    public static func disagreeing(_ db: Database) throws -> [Disagreement] {
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT k.editionId AS editionId, k.key AS key, k.origin AS origin,
+                   e.year AS editionYear, w.date AS workDate, w.title AS title,
+                   (SELECT c.name FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
+                     WHERE wc.workId = w.id ORDER BY (wc.role = 'author') DESC, wc.position LIMIT 1) AS author,
+                   (SELECT c.sortName FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
+                     WHERE wc.workId = w.id ORDER BY (wc.role = 'author') DESC, wc.position LIMIT 1) AS sortName
+            FROM edition_key k JOIN edition e ON e.id = k.editionId JOIN work w ON w.id = e.workId
+            WHERE k.origin <> 'manual'
+            ORDER BY k.key
+            """)
+        return rows.compactMap { row in
+            let key: String = row["key"]
+            let workDate: String? = row["workDate"]
+            let editionYear: String? = row["editionYear"]
+            let year = workDate ?? editionYear
+            let author: String? = row["author"]
+            let sortName: String? = row["sortName"]
+            let title: String = row["title"]
+            guard !CiteKeyGenerator.agrees(key: key, author: author, sortName: sortName, year: year, title: title) else { return nil }
+            return Disagreement(editionId: row["editionId"], key: key, origin: row["origin"],
+                                expected: CiteKeyGenerator.base(author: author, sortName: sortName, year: year, title: title))
+        }
+    }
+
+    /// Remplace les clés des éditions données par celles que donnent leurs
+    /// fiches. Une clé figée devient une pierre tombale qui renvoie à la
+    /// nouvelle, elle-même figée (elle remplace une clé qui a pu être citée) ;
+    /// les pierres plus anciennes qui menaient à l'ancienne mènent désormais à
+    /// la nouvelle. Une clé provisoire (jamais sortie) est seulement recalculée.
+    /// Les clés manuelles ne bougent jamais.
+    @discardableResult
+    public static func replace(_ db: Database, editionIds: [UUID], reason: String, now: Date = Date()) throws -> [Change] {
+        var olds: [UUID: EditionKey] = [:]
+        for id in editionIds {
+            if let key = try EditionKey.fetchOne(db, key: id), key.origin != .manual { olds[id] = key }
+        }
+        for (id, key) in olds {
+            if key.origin != .generated {
+                try RetiredKey(key: key.key, editionId: id, replacedBy: nil, reason: reason, dateRetired: now).save(db)
+            }
+            _ = try key.delete(db)
+        }
+        try assignMissing(db, now: now)
+        var changes: [Change] = []
+        for (id, old) in olds.sorted(by: { $0.value.key < $1.value.key }) {
+            guard var fresh = try EditionKey.fetchOne(db, key: id) else { continue }
+            if old.origin != .generated {
+                fresh.origin = old.origin == .manual ? .manual : .stable
+                try fresh.update(db)
+                try db.execute(sql: "UPDATE edition_key_retired SET replacedBy = ? WHERE key = ? COLLATE NOCASE OR replacedBy = ? COLLATE NOCASE",
+                               arguments: [fresh.key, old.key, old.key])
+            }
+            changes.append(Change(editionId: id, old: old.key, new: fresh.key, retired: old.origin != .generated))
+        }
+        return changes
+    }
+}
+
+extension CatalogStore {
+    /// Les clés qui ne disent plus ce que dit leur fiche.
+    public func disagreeingKeys() async throws -> [EditionKey.Disagreement] {
+        try await db.pool.read { try EditionKey.disagreeing($0) }
+    }
+
+    /// Remplace les clés des éditions données ; `dryRun` : calcule sans rien écrire.
+    public func replaceKeys(editionIds: [UUID], reason: String, dryRun: Bool) async throws -> [EditionKey.Change] {
+        try await db.pool.write { conn in
+            var changes: [EditionKey.Change] = []
+            try conn.inSavepoint {
+                changes = try EditionKey.replace(conn, editionIds: editionIds, reason: reason)
+                return dryRun ? .rollback : .commit
+            }
+            return changes
         }
     }
 }
