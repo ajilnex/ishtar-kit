@@ -1,3 +1,5 @@
+// Propre à macOS (cadres d'Apple ou démon) : hors de la suite Linux (WP-34).
+#if canImport(PDFKit)
 import Foundation
 import Testing
 import GRDB
@@ -514,3 +516,4 @@ struct DocumentPersistenceTests {
         #expect(links.first?.targetAnnotationId == v5Ann2Id)
     }
 }
+#endif

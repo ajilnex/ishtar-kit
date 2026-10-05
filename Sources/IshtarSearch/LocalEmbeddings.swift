@@ -1,4 +1,5 @@
 import Foundation
+#if canImport(NaturalLanguage)
 import NaturalLanguage
 
 /// Les embeddings LOCAUX d'Apple (`NLContextualEmbedding`, script latin —
@@ -85,3 +86,30 @@ public final class LocalEmbeddings: @unchecked Sendable {
         return mean
     }
 }
+#else
+/// Sous Linux (l'outil du serveur, WP-34) : pas d'embeddings locaux d'Apple.
+/// Même interface, toujours indisponible — la recherche sémantique reste
+/// l'affaire du Mac ; la recherche plein texte (FTS5) fonctionne partout.
+public final class LocalEmbeddings: @unchecked Sendable {
+    public let modelID = "indisponible"
+    public var dimension: Int { 0 }
+
+    public enum EmbeddingError: LocalizedError {
+        case modelUnavailable
+        case assetsMissing
+
+        public var errorDescription: String? {
+            switch self {
+            case .modelUnavailable: "Pas d'embeddings locaux sur ce système (Linux)."
+            case .assetsMissing: "Les ressources du modèle d'embeddings sont absentes."
+            }
+        }
+    }
+
+    public init() throws { throw EmbeddingError.modelUnavailable }
+    public var hasAssets: Bool { false }
+    public func loadInstalledAssets() throws { throw EmbeddingError.modelUnavailable }
+    public func ensureAssets() async throws { throw EmbeddingError.modelUnavailable }
+    public func embed(_ text: String) throws -> [Float] { throw EmbeddingError.modelUnavailable }
+}
+#endif

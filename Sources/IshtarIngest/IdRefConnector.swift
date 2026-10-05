@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import IshtarCatalog
 
 /// Une personne trouvée dans IdRef, le référentiel d'autorités de

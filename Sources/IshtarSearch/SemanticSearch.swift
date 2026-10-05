@@ -1,5 +1,10 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+/// Sous Linux (outil du serveur, WP-34) : l'empreinte portable, même usage.
+private typealias SHA256 = PortableSHA256
+#endif
 import GRDB
 import IshtarCatalog
 

@@ -115,6 +115,7 @@ struct FulltextTests {
         #expect(hits.count == 1)
     }
 
+    #if canImport(PDFKit) // le PDF d’essai est fabriqué par PDFKit (WP-34)
     @Test("PDF sans texte : needsOCR, zéro page indexée")
     func scannedPDFNeedsOCR() async throws {
         let dir = try makeTempDir()
@@ -133,6 +134,8 @@ struct FulltextTests {
         #expect(refreshed.isTextExtracted)
         #expect(try await pageCount(of: document.id, in: db) == 0)
     }
+
+    #endif
 
     @Test("Une saisie brute pleine de caractères FTS5 ne fait jamais planter la requête")
     func rawQueryIsNeutralized() async throws {

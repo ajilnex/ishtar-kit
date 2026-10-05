@@ -1,4 +1,7 @@
 import Foundation
+#if !canImport(Darwin)
+import ZIPFoundation
+#endif
 import GRDB
 import IshtarCatalog
 
@@ -131,6 +134,21 @@ public struct PublicationReport: Sendable, Equatable {
 }
 
 public struct CatalogPublisher: Sendable {
+    #if !canImport(Darwin)
+    /// DEFLATE brut (RFC 1951), le même format que `NSData.compressed(using: .zlib)`
+    /// sur macOS — celui que le Bibliothécaire lit (`inflateRawSync`). Sous Linux
+    /// (WP-34), par ZIPFoundation, qui s'appuie sur zlib.
+    static func deflated(_ data: Data) -> Data? {
+        var out = Data()
+        do {
+            _ = try Data.compress(size: Int64(data.count), bufferSize: 64 * 1024,
+                                  provider: { position, size in data.subdata(in: Int(position) ..< Int(position) + size) },
+                                  consumer: { out.append($0) })
+        } catch { return nil }
+        return out
+    }
+    #endif
+
     let db: CatalogDatabase
 
     public init(db: CatalogDatabase) {
@@ -325,7 +343,15 @@ public struct CatalogPublisher: Sendable {
             try Self.reduce(snapshotAt: sqliteTemp,
                             keeping: Set(catalogue.editions.flatMap { $0.files.map(\.sha256) }))
             if fm.fileExists(atPath: sqliteTarget.path) {
+                #if canImport(Darwin)
                 _ = try fm.replaceItemAt(sqliteTarget, withItemAt: sqliteTemp)
+                #else
+                // Sous Linux, replaceItemAt échoue (« le fichier n'existe pas ») ;
+                // rename(2) remplace la cible d'un seul geste (WP-34).
+                guard rename(sqliteTemp.path, sqliteTarget.path) == 0 else {
+                    throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: sqliteTarget.path])
+                }
+                #endif
             } else {
                 try fm.moveItem(at: sqliteTemp, to: sqliteTarget)
             }
@@ -356,7 +382,11 @@ public struct CatalogPublisher: Sendable {
                 var byNumber: [Int: String] = [:]
                 for (n, t) in pages { byNumber[n] = t.replacingOccurrences(of: "\u{0C}", with: " ") }
                 let text = (1...last).map { byNumber[$0] ?? "" }.joined(separator: "\u{0C}")
+                #if canImport(Darwin)
                 guard let packed = try? (Data(text.utf8) as NSData).compressed(using: .zlib) as Data else { continue }
+                #else
+                guard let packed = Self.deflated(Data(text.utf8)) else { continue }
+                #endif
                 let target = corpusOut.appendingPathComponent("\(hash).pages.deflate")
                 if let existing = try? Data(contentsOf: target), existing == packed { continue }
                 try packed.write(to: target, options: .atomic)

@@ -1,4 +1,10 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 import IshtarCatalog
 
 /// Étage 3 de l'entonnoir (opt-in, réseau) : interroge le SRU de la BnF pour un

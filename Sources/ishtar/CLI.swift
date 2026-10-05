@@ -4,7 +4,9 @@ import GRDB
 import IshtarCatalog
 import IshtarIngest
 import IshtarSearch
+#if canImport(PDFKit)
 import PDFKit
+#endif
 
 @main
 struct IshtarCLI: AsyncParsableCommand {
@@ -12,10 +14,24 @@ struct IshtarCLI: AsyncParsableCommand {
         commandName: "ishtar",
         abstract: "Ishtar — le moteur de bibliothèque savante. / The scholarly library engine.",
         version: "0.2.0",
-        subcommands: [Scan.self, Ingest.self, Extract.self, Search.self,
-                      Embed.self, Find.self, OCRCompare.self, ImportBibtex.self, ImportZotero.self,
-                      Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self, Traductions.self, Reunir.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self, Prenoms.self, Doublons.self, Exporter.self, Annotations.self]
+        subcommands: sousCommandes
     )
+
+    /// Le banc de comparaison OCR (Vision) n'existe que sur macOS ; l'outil du
+    /// serveur, sous Linux, a toutes les autres commandes (WP-34).
+    static var sousCommandes: [ParsableCommand.Type] {
+        var liste: [ParsableCommand.Type] = [
+            Scan.self, Ingest.self, Extract.self, Search.self,
+            Embed.self, Find.self, ImportBibtex.self, ImportZotero.self,
+            Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self,
+            Traductions.self, Reunir.self, Ranger.self, Verifier.self, Corriger.self, Auteurs.self, Titres.self,
+            Prenoms.self, Doublons.self, Exporter.self, Annotations.self, Fonds.self,
+        ]
+        #if canImport(Vision)
+        liste.insert(OCRCompare.self, at: 6)
+        #endif
+        return liste
+    }
 }
 
 struct Embed: AsyncParsableCommand {
@@ -35,7 +51,11 @@ struct Embed: AsyncParsableCommand {
         print("Modèle local : \(embeddings.modelID) (dimension \(embeddings.dimension))")
         let done = try await indexer.indexAllPending { done, total in
             print("\rVectorisation \(done)/\(total)…", terminator: "")
+            #if canImport(Darwin)
             fflush(stdout)
+            #else
+            fflush(nil) // sous Linux, `stdout` est un état global que Swift 6 refuse ; nil vide tous les flux
+            #endif
         }
         print("\n\(done) page(s) vectorisée(s). Index : \(try store.count()) vecteurs.")
     }
@@ -212,6 +232,7 @@ struct Search: AsyncParsableCommand {
 
 // MARK: - Banc de mesure OCR (WP-OCR-MESURE)
 
+#if canImport(Vision)
 /// Compare les deux moteurs Vision sur un même PDF muet, sans rien écrire dans
 /// un catalogue : le moteur macOS 26 (`RecognizeDocumentsRequest`) et le repli
 /// (`VNRecognizeTextRequest`). Le but n'est pas le nombre de caractères mais le
@@ -279,6 +300,8 @@ struct OCRCompare: AsyncParsableCommand {
 }
 
 // MARK: - Import BibTeX (WP-10 / M2b — le pendant en entrée de l'export WP-09)
+
+#endif
 
 struct ImportBibtex: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -1103,12 +1126,17 @@ struct Doublons: AsyncParsableCommand {
 
     /// Annotations d'un PDF faites par un lecteur (surlignages, notes), hors liens et champs.
     static func annotations(_ path: String) -> Int {
+        #if canImport(PDFKit)
         guard path.lowercased().hasSuffix(".pdf"), let doc = PDFDocument(url: URL(fileURLWithPath: path)) else { return 0 }
         var n = 0
         for i in 0..<min(doc.pageCount, 2000) {
             n += doc.page(at: i)?.annotations.filter { !["Link", "Widget"].contains($0.type ?? "") }.count ?? 0
         }
         return n
+        #else
+        // Sous Linux : pas de lecteur d'annotations (WP-34) ; aucun exemplaire n'est dit annoté.
+        return 0
+        #endif
     }
 
     func run() async throws {

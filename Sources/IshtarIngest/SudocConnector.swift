@@ -1,4 +1,10 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// Une personne nommée dans une notice du Sudoc (zones UNIMARC 700-702).
 public struct SudocAgent: Sendable, Equatable {

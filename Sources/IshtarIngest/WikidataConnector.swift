@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Une œuvre selon Wikidata, avec tous les titres sous lesquels elle circule :
 /// libellés dans les langues d'Europe, titre original, titres de ses éditions

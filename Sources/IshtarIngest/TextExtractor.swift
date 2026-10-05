@@ -1,7 +1,9 @@
 import Foundation
 import IshtarCatalog
-import PDFKit
 import ZIPFoundation
+#if canImport(FoundationXML)
+import FoundationXML
+#endif
 
 /// Une page de texte extraite, avant insertion en base.
 public struct ExtractedPage: Sendable, Equatable {
@@ -83,14 +85,14 @@ public enum TextExtractor {
     // MARK: - PDF
 
     static func extractPDF(_ url: URL) -> ExtractedText? {
-        guard let document = PDFDocument(url: url) else { return nil }
+        guard let document = PDFSource.open(url) else { return nil }
         let count = document.pageCount
         guard count > 0 else { return ExtractedText(pages: [], needsOCR: false) }
 
         var pages: [ExtractedPage] = []
         var totalCharacters = 0
         for index in 0 ..< count {
-            let text = document.page(at: index)?.string ?? ""
+            let text = document.text(index) ?? ""
             totalCharacters += text.count
             let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !clean.isEmpty {
@@ -126,8 +128,8 @@ public enum TextExtractor {
         var hrefById: [String: String] = [:]
         for node in (try? opf.nodes(forXPath: "//*[local-name()='manifest']/*[local-name()='item']")) ?? [] {
             guard let element = node as? XMLElement,
-                  let id = element.attribute(forName: "id")?.stringValue,
-                  let href = element.attribute(forName: "href")?.stringValue
+                  let id = element.plainAttribute("id"),
+                  let href = element.plainAttribute("href")
             else { continue }
             hrefById[id] = href
         }
@@ -137,7 +139,7 @@ public enum TextExtractor {
         var counter = 0
         for node in (try? opf.nodes(forXPath: "//*[local-name()='spine']/*[local-name()='itemref']")) ?? [] {
             guard let element = node as? XMLElement,
-                  let idref = element.attribute(forName: "idref")?.stringValue,
+                  let idref = element.plainAttribute("idref"),
                   let href = hrefById[idref]
             else { continue }
 
@@ -270,5 +272,15 @@ public enum TextExtractor {
         var data = Data()
         _ = try? archive.extract(entry) { data.append($0) }
         return data.isEmpty ? nil : data
+    }
+}
+
+extension XMLElement {
+    /// La valeur d'un attribut sans préfixe (`href`, `id`). Sous Linux,
+    /// `attribute(forName:)` le cherche dans l'espace de noms par défaut de
+    /// l'élément (celui de l'OPF, du XHTML), où il n'est jamais : l'EPUB n'y
+    /// rendait ni texte ni couverture. On parcourt alors la liste (WP-34).
+    func plainAttribute(_ name: String) -> String? {
+        attribute(forName: name)?.stringValue ?? attributes?.first { $0.name == name }?.stringValue
     }
 }

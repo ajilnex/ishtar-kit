@@ -1,7 +1,9 @@
 import Foundation
 import GRDB
 import IshtarCatalog
+#if canImport(NaturalLanguage)
 import NaturalLanguage
+#endif
 
 /// La langue d'une édition, reconnue sur son texte (local, sans réseau).
 public struct LanguageProposal: Sendable, Equatable {
@@ -23,10 +25,42 @@ public enum LanguagePass {
 
     /// Langue dominante d'un texte (pur).
     static func recognize(_ text: String) -> (code: String, confidence: Double)? {
+        #if canImport(NaturalLanguage)
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(text)
         guard let best = recognizer.languageHypotheses(withMaximum: 1).first, best.value >= threshold else { return nil }
         return (best.key.rawValue, best.value)
+        #else
+        return recognizeByFunctionWords(text)
+        #endif
+    }
+
+    /// Mots-outils les plus fréquents des langues de la bibliothèque.
+    static let functionWords: [String: Set<String>] = [
+        "fr": ["le", "la", "les", "de", "des", "du", "et", "est", "un", "une", "que", "qui", "dans", "pour", "pas", "ne", "sur", "par", "au", "aux", "ce", "cette", "il", "elle", "nous", "mais", "ou", "donc", "sont", "à", "se", "en", "avec", "plus", "être"],
+        "en": ["the", "of", "and", "to", "is", "that", "in", "it", "for", "as", "with", "was", "this", "be", "are", "by", "which", "not", "but", "or", "from", "have", "an", "they", "we"],
+        "de": ["der", "die", "das", "und", "ist", "nicht", "zu", "den", "von", "mit", "sich", "des", "auf", "für", "eine", "ein", "dem", "auch", "es", "als", "wird", "sind", "wie", "aus", "aber"],
+        "it": ["il", "di", "che", "la", "è", "per", "un", "non", "una", "del", "della", "sono", "si", "gli", "le", "nel", "con", "da", "come", "ma", "anche", "questo", "alla", "dei", "più"],
+        "es": ["el", "los", "las", "de", "que", "y", "en", "un", "una", "es", "por", "con", "no", "para", "se", "del", "su", "al", "como", "más", "pero", "sus", "le", "ya", "o"],
+        "la": ["et", "est", "in", "non", "ad", "quod", "cum", "sed", "ut", "qui", "quae", "enim", "autem", "esse", "sunt", "vel", "per", "ex", "ab", "etiam", "nam", "atque", "hoc", "quam", "tamen"],
+    ]
+
+    /// Reconnaissance portable (l'outil du serveur, sous Linux — WP-34). Un
+    /// mot-outil commun à plusieurs langues (« la », « de », « et ») ne dit
+    /// rien : seuls comptent ceux qui n'appartiennent qu'à une langue. La
+    /// langue retenue doit en porter la part fixée par le même seuil que
+    /// NaturalLanguage ; sans assez d'indices, on s'abstient. Pur.
+    static func recognizeByFunctionWords(_ text: String) -> (code: String, confidence: Double)? {
+        let words = text.lowercased().split { !$0.isLetter }.map(String.init)
+        var scores: [String: Int] = [:]
+        for word in words {
+            let languages = functionWords.filter { $0.value.contains(word) }
+            if languages.count == 1, let code = languages.first?.key { scores[code, default: 0] += 1 }
+        }
+        let total = scores.values.reduce(0, +)
+        guard total >= 30, let best = scores.max(by: { $0.value < $1.value }) else { return nil }
+        let confidence = Double(best.value) / Double(total)
+        return confidence >= threshold ? (best.key, confidence) : nil
     }
 
     public static func proposals(in db: CatalogDatabase) async throws -> [LanguageProposal] {
