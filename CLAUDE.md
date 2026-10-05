@@ -1,7 +1,7 @@
 # ishtar-kit — consignes agent
 
 Moteur open source (Apache-2.0) d'Ishtar, bibliothèque savante locale-first pour
-les SHS. Le cockpit du projet est dans `../docs/` (dépôt ishtar-docs) : lire
+les SHS. Le cockpit du projet est dans `../docs/` : lire
 `10-ARCHITECTURE.md` (invariants) et son WP dans `30-CHANTIERS.md` avant de coder.
 
 **Avant d'ouvrir le moindre fichier : `../docs/45-REGISTRE.md`.** D'autres
@@ -15,7 +15,7 @@ Règles dures :
 - Ce paquet ne dépend jamais de SwiftUI/AppKit d'interface : testable sans UI.
 - Migrations GRDB additives uniquement ; schéma documenté dans SCHEMA.md.
 - La correction humaine est le seul chemin vers la confiance `high`.
-- Tout changement livre ses tests : `swift test` doit être vert.
+- Tout changement livre ses tests : `Scripts/swift-test.sh` vert.
 - Commentaires en français, sobres (contraintes, pas de narration).
 
-Épreuve du réel (lecture seule) : `swift run ishtar scan ~/SARx/Bibliothèque\ céleste`
+Épreuve du réel (lecture seule) : `swift run ishtar scan ~/SARx/Etagères/Bibliothèque\ céleste`

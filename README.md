@@ -1,23 +1,22 @@
 # ishtar-kit
 
-**FR** — Le moteur open source d'[Ishtar](https://ishtar.app), bibliothèque savante locale-first pour chercheurs en sciences humaines et sociales. Un dossier chaotique de documents devient un catalogue : scanné sans jamais être modifié, dédupliqué par contenu, identifié par un entonnoir mécanique (nom de fichier → métadonnées embarquées → ISBN/DOI et catalogues publics), cherchable — et, dans l'application, interrogeable par un démon dont les citations sont vérifiées contre vos documents réels.
+**FR** — Le moteur open source d'Ishtar, bibliothèque savante locale-first pour chercheurs en SHS : un dossier de documents devient un catalogue SQLite, scanné sans jamais être modifié, dédupliqué, identifié par un entonnoir mécanique, cherchable, publiable, interrogeable par un démon aux citations vérifiées.
 
-**EN** — The open-source engine of Ishtar, a local-first scholarly library for humanities researchers. A messy folder of documents becomes a catalog: scanned without ever being modified, content-deduplicated, identified through a mechanical funnel, searchable — and, in the app, queryable by a daemon whose citations are verified against your actual documents.
+**EN** — The open-source engine of Ishtar, a local-first scholarly library for humanities researchers.
 
 ## Modules
 
-| Module | Rôle |
-|---|---|
-| `IshtarCatalog` | Ontologie Œuvre / Édition / Document (FRBR-léger), schéma SQLite (GRDB), migrations |
-| `IshtarIngest` | Scan non destructif, SHA-256, entonnoir d'identification, dossiers → collections |
-| `IshtarSearch` | Recherche de catalogue (FTS5 plein texte et sémantique aux jalons suivants) |
-| `IshtarDaemon` | Contrats du démon : contexte d'invocation, flux d'événements, fournisseurs BYOK/locaux, registre d'outils |
-| `ishtar` (CLI) | `ishtar scan <dossier>`, `ishtar ingest <dossier> --db <catalogue.sqlite>` |
+- `IshtarCatalog` : ontologie Œuvre/Édition/Document, schéma SQLite, migrations, curation
+- `IshtarIngest` : scan, entonnoir, texte, OCR local, connecteurs opt-in, imports BibTeX/Zotero
+- `IshtarSearch` : plein texte (FTS5), sémantique, publication, exports bibliographiques
+- `IshtarDaemon` : clients LLM, outils, citations vérifiées
+- `CSQLiteVec` : sqlite-vec
+- `ishtar` : la CLI (`ishtar --help`)
 
 ## Invariants
 
-1. Le scan ne touche jamais le réseau ni l'IA.
-2. Le dossier de l'utilisateur est en **lecture seule**.
+1. Le scan et l'ingestion ne touchent jamais le réseau ni l'IA.
+2. Le dossier de l'utilisateur n'est jamais modifié, sauf par `ranger`, `doublons` et `corriger` (`--appliquer`, journal pour défaire).
 3. Toute proposition d'identification est *proposée*, jamais imposée.
 4. Le schéma SQLite est un format d'échange documenté ([SCHEMA.md](SCHEMA.md)).
 
@@ -25,8 +24,14 @@
 
 ```sh
 swift build
-swift test
-swift run ishtar scan ~/Documents/MaBibliotheque
+Scripts/swift-test.sh   # `swift test` échoue sans Xcode
+swift run ishtar scan <dossier>
 ```
 
-Requiert macOS 14+, Swift 6. Licence [Apache-2.0](LICENSE).
+macOS 14+, Swift 6 ; tests hors bac à sable (OCR Vision). Linux : `ishtar` seul, `Scripts/linux/construire.sh`.
+
+## Publier
+
+`ishtar publish --db catalog.sqlite --root <bibliothèque> --out <dossier>` écrit le « Catalogue publié » : `catalogue.json` (en dernier), `covers/`, et `corpus/` avec `--corpus`. `--exclude` (un nom vaut à toute profondeur) et `--exclude-title-prefix` fixent ce qui ne sort jamais ; `--dry-run` n'écrit rien. Format : SCHEMA.md ; contrat v1 : `contrats/` (dépôt `_PONTS`).
+
+Licence [Apache-2.0](LICENSE).
