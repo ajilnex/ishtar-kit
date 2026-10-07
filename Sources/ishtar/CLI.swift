@@ -1121,6 +1121,16 @@ struct Cles: AsyncParsableCommand {
     @Flag(name: .long, help: "Écrit (sinon : montre ce qui changerait).")
     var appliquer = false
 
+    @Flag(name: .long, help: "Avec --appliquer : remplace toutes les clés jugées fausses (sinon, --cle est exigé).")
+    var toutes = false
+
+    func validate() throws {
+        // Une clé retirée ne revient jamais : on n'en retire en masse que sur demande expresse.
+        if appliquer && cle.isEmpty && !toutes {
+            throw ValidationError("--appliquer exige --cle <clé> (répétable) ou --toutes.")
+        }
+    }
+
     func run() async throws {
         let database = try CatalogDatabase(at: db)
         let store = CatalogStore(db: database)
