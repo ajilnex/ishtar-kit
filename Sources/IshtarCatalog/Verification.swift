@@ -122,12 +122,36 @@ extension CatalogStore {
     }
 
     /// Les pierres tombales, par édition (pour la publication : les anciennes
-    /// clés d'une édition, qui y mènent encore).
+    /// clés d'une édition, qui y mènent encore). Une pierre dont l'édition a
+    /// disparu (réunie à une autre, ou remplacée par une fiche propre) suit
+    /// `replacedBy`, de pierre en pierre, jusqu'à la clé vivante ; sans clé
+    /// vivante au bout, elle n'est rattachée à rien.
     public func retiredKeysByEdition() async throws -> [UUID: [String]] {
         try await db.pool.read { conn in
+            let vivantes = Set(try UUID.fetchAll(conn, sql: "SELECT id FROM edition"))
+            var editionDeCle: [String: UUID] = [:]
+            for k in try EditionKey.fetchAll(conn) { editionDeCle[k.key.lowercased()] = k.editionId }
+            let pierres = try RetiredKey.order(Column("dateRetired"), Column("key")).fetchAll(conn)
+            var pierreDeCle: [String: RetiredKey] = [:]
+            for p in pierres { pierreDeCle[p.key.lowercased()] = p }
+
+            func cible(_ pierre: RetiredKey) -> UUID? {
+                if vivantes.contains(pierre.editionId) { return pierre.editionId }
+                var suivante = pierre.replacedBy
+                for _ in 0..<8 {
+                    guard let cle = suivante?.lowercased() else { return nil }
+                    if let e = editionDeCle[cle] { return e }
+                    guard let p = pierreDeCle[cle] else { return nil }
+                    if vivantes.contains(p.editionId) { return p.editionId }
+                    suivante = p.replacedBy
+                }
+                return nil
+            }
+
             var byEdition: [UUID: [String]] = [:]
-            for stone in try RetiredKey.order(Column("dateRetired"), Column("key")).fetchAll(conn) {
-                byEdition[stone.editionId, default: []].append(stone.key)
+            for stone in pierres {
+                guard let e = cible(stone) else { continue }
+                byEdition[e, default: []].append(stone.key)
             }
             return byEdition
         }

@@ -97,6 +97,25 @@ struct ClesJustesTests {
         #expect(try await store.retiredKeysByEdition()[pline]?.sorted() == ["Jeune100Lettres", "Pline100Lettres"])
     }
 
+    @Test("La pierre d'une édition disparue suit replacedBy jusqu'à la clé vivante")
+    func tombstoneOfVanishedEdition() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let kant = try await db.pool.write { conn -> UUID in
+            let kant = try edition(conn, title: "Critique de la raison pure", author: "Immanuel Kant", year: "1781",
+                                   key: "Kant1781Critique", path: "/lib/Kant.pdf", hash: "kkk").edition
+            // Fiche absorbée par une réunion : son édition n'existe plus.
+            try RetiredKey(key: "Kant1781Critique-2006", editionId: UUID(), replacedBy: "Kant1781Critique", reason: "essai").insert(conn)
+            // Chaîne : une pierre qui mène à une autre pierre, puis à la clé vivante.
+            try RetiredKey(key: "Kant1781Raison", editionId: UUID(), replacedBy: "Kant1781Critique-2006", reason: "essai").insert(conn)
+            // Fiche supprimée sans remplaçante : rattachée à rien.
+            try RetiredKey(key: "Doyle1893Memoirs", editionId: UUID(), replacedBy: nil, reason: "essai").insert(conn)
+            return kant
+        }
+        let parEdition = try await CatalogStore(db: db).retiredKeysByEdition()
+        #expect(parEdition[kant]?.sorted() == ["Kant1781Critique-2006", "Kant1781Raison"])
+        #expect(parEdition.values.allSatisfy { !$0.contains("Doyle1893Memoirs") })
+    }
+
     @Test("Effacer une clé figée laisse une pierre ; une clé provisoire, non")
     func deletion() async throws {
         let db = try CatalogDatabase(inMemory: ())
