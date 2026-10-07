@@ -264,6 +264,42 @@ public final class CatalogDatabase: Sendable {
                           columns: ["scheme", "identifier"])
         }
 
+        migrator.registerMigration("v9_cles_retirees_et_verifications") { db in
+            // Les pierres tombales (décision C4 du 03/10, et d'Aubin le 04/10 :
+            // « je ne veux pas garder les fausses clés ») : une clé qui a pu
+            // être citée ne disparaît jamais, elle est retirée et renvoie à la
+            // clé juste. Pas de clé étrangère : la pierre survit à l'édition.
+            try db.create(table: "edition_key_retired") { t in
+                t.column("key", .text).primaryKey().collate(.nocase)
+                t.column("editionId", .text).notNull()
+                t.column("replacedBy", .text)
+                t.column("reason", .text).notNull()
+                t.column("dateRetired", .datetime).notNull()
+            }
+            try db.create(index: "edition_key_retired_by_edition", on: "edition_key_retired", columns: ["editionId"])
+            // Une clé qui a pu sortir (figée ou manuelle) et qu'on efface —
+            // réunion de deux éditions, fiche supprimée — laisse sa pierre.
+            try db.execute(sql: """
+                CREATE TRIGGER edition_key_retired_on_delete AFTER DELETE ON edition_key
+                WHEN OLD.origin <> 'generated'
+                BEGIN
+                    INSERT OR IGNORE INTO edition_key_retired (key, editionId, replacedBy, reason, dateRetired)
+                    VALUES (OLD.key, OLD.editionId, NULL, 'supprimée', strftime('%Y-%m-%d %H:%M:%f', 'now'));
+                END
+                """)
+            // La vérification sur pièces (04/10) : un fichier dont la fiche a
+            // été confrontée à ses pages par deux lecteurs. Elle vaut pour ces
+            // octets-là : si l'empreinte du fichier change, elle ne vaut plus.
+            try db.create(table: "verification") { t in
+                t.column("documentId", .text).primaryKey()
+                    .references("document", onDelete: .cascade)
+                t.column("contentHash", .text).notNull()
+                t.column("readers", .text).notNull()
+                t.column("proof", .text).notNull()
+                t.column("dateVerified", .datetime).notNull()
+            }
+        }
+
         // Les migrations suivantes (embeddings, artéfacts) arrivent avec les jalons M3–M4.
 
         return migrator
