@@ -300,6 +300,46 @@ public final class CatalogDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v10_cles_retirees_gardees") { db in
+            // Une clé retirée n'est jamais redonnée à une autre édition, et une
+            // clé figée qui change laisse toujours sa pierre : règles posées en
+            // base, pour que tout binaire (ancien compris) les respecte.
+            // Une édition peut reprendre sa propre ancienne clé (correction
+            // d'une erreur) : sa pierre est alors levée, la clé est vivante.
+            for (name, event) in [("edition_key_no_reuse_insert", "INSERT ON edition_key"),
+                                  ("edition_key_no_reuse_update", "UPDATE OF key ON edition_key")] {
+                try db.execute(sql: """
+                    CREATE TRIGGER \(name) BEFORE \(event)
+                    WHEN EXISTS (SELECT 1 FROM edition_key_retired r WHERE r.key = NEW.key AND r.editionId <> NEW.editionId)
+                    BEGIN
+                        SELECT RAISE(ABORT, 'clé retirée : elle ne peut pas être redonnée à une autre édition');
+                    END
+                    """)
+            }
+            try db.execute(sql: """
+                CREATE TRIGGER edition_key_retired_on_update AFTER UPDATE OF key ON edition_key
+                WHEN OLD.origin <> 'generated' AND OLD.key <> NEW.key COLLATE NOCASE
+                BEGIN
+                    INSERT OR IGNORE INTO edition_key_retired (key, editionId, replacedBy, reason, dateRetired)
+                    VALUES (OLD.key, OLD.editionId, NEW.key, 'remplacée', strftime('%Y-%m-%d %H:%M:%f', 'now'));
+                    UPDATE edition_key_retired SET replacedBy = NEW.key
+                    WHERE (key = OLD.key AND editionId = OLD.editionId) OR replacedBy = OLD.key;
+                END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER edition_key_unretire_on_insert AFTER INSERT ON edition_key
+                BEGIN
+                    DELETE FROM edition_key_retired WHERE key = NEW.key AND editionId = NEW.editionId;
+                END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER edition_key_unretire_on_update AFTER UPDATE OF key ON edition_key
+                BEGIN
+                    DELETE FROM edition_key_retired WHERE key = NEW.key AND editionId = NEW.editionId;
+                END
+                """)
+        }
+
         // Les migrations suivantes (embeddings, artéfacts) arrivent avec les jalons M3–M4.
 
         return migrator

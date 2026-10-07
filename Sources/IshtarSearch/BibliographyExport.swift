@@ -49,6 +49,8 @@ public enum BibliographyExport {
         if let l = e.language, !l.isEmpty { fields.append(("langid", l)) }
         if let i = e.isbn13, !i.isEmpty { fields.append(("isbn", i)) }
         if let d = e.doi, !d.isEmpty { fields.append(("doi", d)) }
+        // Les anciennes clés (pierres tombales) : biblatex les reconnaît comme alias.
+        if let former = e.formerKeys, !former.isEmpty { fields.append(("ids", former.joined(separator: ","))) }
         var lines = ["@\(type){\(e.key),"]
         for (i, f) in fields.enumerated() {
             lines.append("  \(f.0) = {\(escape(f.1))}\(i == fields.count - 1 ? "" : ",")")

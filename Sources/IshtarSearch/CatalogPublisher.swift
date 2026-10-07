@@ -509,6 +509,16 @@ public struct CatalogPublisher: Sendable {
                         (SELECT DISTINCT editionId FROM document WHERE editionId IS NOT NULL)
                     """)
                 try conn.execute(sql: "DELETE FROM work WHERE id NOT IN (SELECT DISTINCT workId FROM edition)")
+                // Les éditions privées emportent leurs pierres : la copie ne garde que celles qui
+                // mènent à une édition gardée (le déclencheur de suppression a pu en écrire pour
+                // les livres écartés ; elles ne mènent à rien, elles partent aussi).
+                if try conn.tableExists("edition_key_retired") {
+                    let kept = Set(try RetiredKey.byEdition(conn).values.flatMap { $0 }.map { $0.lowercased() })
+                    for key in try String.fetchAll(conn, sql: "SELECT key FROM edition_key_retired")
+                    where !kept.contains(key.lowercased()) {
+                        try conn.execute(sql: "DELETE FROM edition_key_retired WHERE key = ?", arguments: [key])
+                    }
+                }
                 if try conn.tableExists("conversation") {
                     try conn.execute(sql: "DELETE FROM conversation")
                 }

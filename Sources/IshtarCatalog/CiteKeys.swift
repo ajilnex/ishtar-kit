@@ -220,11 +220,14 @@ public enum CiteKeyGenerator {
 public enum CiteKeyError: Error, Equatable, LocalizedError {
     case invalid(String)
     case taken(String)
+    /// Une pierre tombale d'une autre édition porte cette clé : elle n'est jamais redonnée.
+    case retired(String)
 
     public var errorDescription: String? {
         switch self {
         case .invalid(let key): return "Clé invalide : « \(key) » (lettres, chiffres, - _ : seulement)."
         case .taken(let key): return "La clé « \(key) » est déjà prise par une autre édition."
+        case .retired(let key): return "La clé « \(key) » a été retirée d'une autre édition : elle n'est jamais redonnée."
         }
     }
 }
@@ -403,6 +406,11 @@ extension CatalogStore {
                 """, arguments: [clean]), owner != editionId {
                 throw CiteKeyError.taken(clean)
             }
+            if try Bool.fetchOne(conn, sql: """
+                SELECT EXISTS (SELECT 1 FROM edition_key_retired WHERE key = ? COLLATE NOCASE AND editionId <> ?)
+                """, arguments: [clean, editionId]) == true {
+                throw CiteKeyError.retired(clean)
+            }
             try EditionKey(editionId: editionId, key: clean, origin: .manual).save(conn)
         }
     }
@@ -492,7 +500,10 @@ extension EditionKey {
         }
         for (id, key) in olds {
             if key.origin != .generated {
-                try RetiredKey(key: key.key, editionId: id, replacedBy: nil, reason: reason, dateRetired: now).save(db)
+                // `insert` : une pierre existante (même édition, ancienne clé reprise) n'est pas écrasée.
+                if try RetiredKey.fetchOne(db, key: key.key) == nil {
+                    try RetiredKey(key: key.key, editionId: id, replacedBy: nil, reason: reason, dateRetired: now).insert(db)
+                }
             }
             _ = try key.delete(db)
         }

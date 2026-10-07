@@ -44,6 +44,11 @@ extension CatalogStore {
                 ORDER BY k.key
                 """)
             var local = Set(rows.map { ($0["key"] as String).lowercased() })
+            // Les pierres tombales : une clé retirée n'est jamais redonnée (à une autre édition).
+            var stones: [String: UUID] = [:]
+            for r in try Row.fetchAll(conn, sql: "SELECT key, editionId FROM edition_key_retired") {
+                stones[(r["key"] as String).lowercased()] = r["editionId"] as UUID
+            }
             var changes: [(from: String, to: String)] = []
             for row in rows {
                 let key: String = row["key"]
@@ -53,16 +58,18 @@ extension CatalogStore {
                 let same = hashes.compactMap { hashIndex[$0] }.sorted().first ?? isbn.flatMap { isbnIndex[$0] }
                 if let same, same.lowercased() == key.lowercased() { continue }
                 let target: String
-                if let same, !local.contains(same.lowercased()) {
+                let editionId: UUID = row["editionId"]
+                if let same, !local.contains(same.lowercased()),
+                   stones[same.lowercased()] == nil || stones[same.lowercased()] == editionId {
                     // La même édition ailleurs : sa clé, qu'aucune autre édition du fonds ne porte.
                     target = same
                 } else if foreignSet.contains(key.lowercased()) {
-                    target = CiteKeyGenerator.unique(base: key, editionYear: nil, taken: local.union(foreignSet))
+                    target = CiteKeyGenerator.unique(base: key, editionYear: nil, taken: local.union(foreignSet).union(stones.keys))
                 } else {
                     continue
                 }
                 try conn.execute(sql: "UPDATE edition_key SET key = ?, origin = ? WHERE editionId = ?",
-                                 arguments: [target, EditionKey.Origin.stable.rawValue, row["editionId"] as UUID])
+                                 arguments: [target, EditionKey.Origin.stable.rawValue, editionId])
                 local.remove(key.lowercased())
                 local.insert(target.lowercased())
                 changes.append((key, target))

@@ -127,33 +127,41 @@ extension CatalogStore {
     /// `replacedBy`, de pierre en pierre, jusqu'à la clé vivante ; sans clé
     /// vivante au bout, elle n'est rattachée à rien.
     public func retiredKeysByEdition() async throws -> [UUID: [String]] {
-        try await db.pool.read { conn in
-            let vivantes = Set(try UUID.fetchAll(conn, sql: "SELECT id FROM edition"))
-            var editionDeCle: [String: UUID] = [:]
-            for k in try EditionKey.fetchAll(conn) { editionDeCle[k.key.lowercased()] = k.editionId }
-            let pierres = try RetiredKey.order(Column("dateRetired"), Column("key")).fetchAll(conn)
-            var pierreDeCle: [String: RetiredKey] = [:]
-            for p in pierres { pierreDeCle[p.key.lowercased()] = p }
+        try await db.pool.read { try RetiredKey.byEdition($0) }
+    }
+}
 
-            func cible(_ pierre: RetiredKey) -> UUID? {
-                if vivantes.contains(pierre.editionId) { return pierre.editionId }
-                var suivante = pierre.replacedBy
-                for _ in 0..<8 {
-                    guard let cle = suivante?.lowercased() else { return nil }
-                    if let e = editionDeCle[cle] { return e }
-                    guard let p = pierreDeCle[cle] else { return nil }
-                    if vivantes.contains(p.editionId) { return p.editionId }
-                    suivante = p.replacedBy
-                }
-                return nil
-            }
+extension RetiredKey {
+    /// Les anciennes clés par édition vivante (voir `retiredKeysByEdition`).
+    /// Une pierre dont la clé est aujourd'hui celle d'une édition vivante
+    /// n'est jamais rendue : une clé vivante n'est pas une « ancienne clé ».
+    public static func byEdition(_ conn: Database) throws -> [UUID: [String]] {
+        let vivantes = Set(try UUID.fetchAll(conn, sql: "SELECT id FROM edition"))
+        var editionDeCle: [String: UUID] = [:]
+        for k in try EditionKey.fetchAll(conn) { editionDeCle[k.key.lowercased()] = k.editionId }
+        let pierres = try RetiredKey.order(Column("dateRetired"), Column("key")).fetchAll(conn)
+        var pierreDeCle: [String: RetiredKey] = [:]
+        for p in pierres { pierreDeCle[p.key.lowercased()] = p }
 
-            var byEdition: [UUID: [String]] = [:]
-            for stone in pierres {
-                guard let e = cible(stone) else { continue }
-                byEdition[e, default: []].append(stone.key)
+        func cible(_ pierre: RetiredKey) -> UUID? {
+            if vivantes.contains(pierre.editionId) { return pierre.editionId }
+            var suivante = pierre.replacedBy
+            for _ in 0..<8 {
+                guard let cle = suivante?.lowercased() else { return nil }
+                if let e = editionDeCle[cle] { return e }
+                guard let p = pierreDeCle[cle] else { return nil }
+                if vivantes.contains(p.editionId) { return p.editionId }
+                suivante = p.replacedBy
             }
-            return byEdition
+            return nil
         }
+
+        var byEdition: [UUID: [String]] = [:]
+        for stone in pierres {
+            if editionDeCle[stone.key.lowercased()] != nil { continue }
+            guard let e = cible(stone) else { continue }
+            byEdition[e, default: []].append(stone.key)
+        }
+        return byEdition
     }
 }

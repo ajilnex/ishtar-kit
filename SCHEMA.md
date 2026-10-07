@@ -188,6 +188,41 @@ chacune le mot de titre qui les distingue (`Rosenberg2007WilfridFusing`,
 l'année d'édition (`-2003`), puis `-b`. `ishtar keys --recalculer` refait
 toutes les clés provisoires ; les clés figées et manuelles ne bougent jamais.
 
+## Migration v9 — Pierres tombales et vérifications (04/10)
+
+- `edition_key_retired` (clé : `key`, insensible à la casse ; **sans clé
+  étrangère** : la pierre survit à l'édition) : `editionId` (l'édition qui
+  portait la clé), `replacedBy` (la clé qui la remplace, ou NULL si l'édition
+  a disparu), `reason`, `dateRetired`. Index par `editionId`.
+- Déclencheur `edition_key_retired_on_delete` (AFTER DELETE sur `edition_key`,
+  si l'origine n'est pas `generated`) : effacer une clé figée ou manuelle
+  (réunion, fiche supprimée) laisse sa pierre (`reason` « supprimée »). Une
+  clé provisoire (`generated`) n'a jamais pu sortir : elle ne laisse rien.
+- `verification` (clé : `documentId`, cascade) : `contentHash` (les octets lus),
+  `readers`, `proof`, `dateVerified`. Elle ne vaut que pour ces octets-là.
+
+## Migration v10 — Une clé retirée est gardée (07/10)
+
+Deux règles posées en base, donc tenues par tout binaire, ancien compris :
+
+1. **Une clé retirée n'est jamais redonnée à une autre édition.** Déclencheurs
+   `edition_key_no_reuse_insert` (BEFORE INSERT) et `edition_key_no_reuse_update`
+   (BEFORE UPDATE OF key) sur `edition_key` : `RAISE(ABORT)` si la nouvelle clé
+   est la pierre d'une **autre** édition (casse ignorée). Une édition peut
+   reprendre **sa propre** ancienne clé (corriger une erreur) : les
+   déclencheurs `edition_key_unretire_on_insert` / `_on_update` lèvent alors sa
+   pierre (la clé est vivante, et il n'y a pas de cycle de `replacedBy`).
+2. **Une clé figée qui change laisse toujours une pierre.** Déclencheur
+   `edition_key_retired_on_update` (AFTER UPDATE OF key, si l'ancienne origine
+   n'est pas `generated` et que la clé change autrement que par la casse) :
+   pierre `reason` « remplacée », `replacedBy` = la nouvelle clé ; les pierres
+   qui menaient à l'ancienne clé mènent à la nouvelle. `INSERT OR IGNORE` : une
+   pierre déjà écrite par le code (`EditionKey.replace`) n'est pas écrasée.
+
+Le code s'y conforme : `setKey` refuse (`CiteKeyError.retired`), l'attribution
+et la séparation des fonds évitent les pierres, `replace` n'écrase plus une
+pierre. Toute migration reste additive.
+
 ## Catalogue publié — format d'échange (lot F3)
 
 `ishtar publish` écrit, dans un dossier choisi par l'utilisateur, un
@@ -202,6 +237,7 @@ instantané lisible sans Ishtar :
                     "people"?: [ { "name", "sortName"?, "idref"?, "bnf"?, "wikidata"? } ],
                     "kind"?, "year"?, "editionYear"?, "publisher"?, "language"?,
                     "isbn13"?, "doi"?, "discipline"?, "collections": [..],
+                    "formerKeys"?: [..],
                     "status", "confidence", "dateAdded",
                     "files": [ { "sha256", "path", "format", "size" } ] } ] }
   ```
@@ -209,6 +245,12 @@ instantané lisible sans Ishtar :
   de l'œuvre ; `editionYear` n'apparaît que si elle en diffère. `fonds`
   (facultatif, `--fonds`) dit de qui vient la bibliothèque : un site qui
   réunit plusieurs publications peut ainsi montrer chaque fonds à part.
+  `formerKeys` (facultatif) : les anciennes clés de l'édition (pierres
+  tombales, v9) qui y mènent encore ; une pierre d'édition disparue suit
+  `replacedBy` jusqu'à la clé vivante. Une ancienne clé n'est **jamais** une
+  clé vivante (l'éditeur l'écarte) ni celle de deux éditions (le contrat le
+  vérifie). La copie `catalog.sqlite` ne garde que les pierres qui mènent à
+  une édition publiée.
   Trois champs dont les lecteurs dépendent (audit du 03/10, D9) :
   - `work` — toujours présent : l'identifiant de l'œuvre (UUID d'Ishtar).
     Les éditions et les formats d'une même œuvre ne font qu'une carte dans

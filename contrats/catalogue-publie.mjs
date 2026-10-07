@@ -35,6 +35,7 @@ export function erreursCatalogue(c, { limite = 50 } = {}) {
 
   // Deux éditions peuvent partager un fichier (les articles d'un même numéro de revue).
   const cles = new Set()
+  const anciennes = []
   c.editions.forEach((ed, i) => {
     const ou = `editions[${i}]${ed?.key ? ` (${ed.key})` : ''}`
     if (!ed || typeof ed !== 'object') return ecart(`${ou} : objet attendu`)
@@ -42,6 +43,11 @@ export function erreursCatalogue(c, { limite = 50 } = {}) {
     else if (cles.has(ed.key)) ecart(`${ou}.key : en double dans le catalogue`)
     else cles.add(ed.key)
     if (!chaine(ed.work)) ecart(`${ou}.work : identifiant d'œuvre attendu`)
+    // Les anciennes clés (pierres tombales, 04/10) : elles mènent encore à cette édition.
+    if (ed.formerKeys !== undefined && ed.formerKeys !== null) {
+      if (!Array.isArray(ed.formerKeys) || !ed.formerKeys.every(k => chaine(k) && CLE.test(k))) ecart(`${ou}.formerKeys : tableau de clés attendu (${CLE})`)
+      else for (const k of ed.formerKeys) anciennes.push([k, ou])
+    }
     if (!chaine(ed.title)) ecart(`${ou}.title : chaîne attendue`)
     for (const k of ['subtitle', 'publisher', 'language', 'isbn13', 'doi', 'discipline', 'source']) {
       if (!chaineOuAbsente(ed[k])) ecart(`${ou}.${k} : chaîne ou absent`)
@@ -67,6 +73,13 @@ export function erreursCatalogue(c, { limite = 50 } = {}) {
       if (!Number.isInteger(f.size) || f.size < 0) ecart(`${ici}.size : entier positif`)
     })
   })
+  // Une ancienne clé ne désigne qu'une édition, et jamais une clé d'aujourd'hui.
+  const vues = new Set()
+  for (const [k, ou] of anciennes) {
+    if (cles.has(k)) ecart(`${ou}.formerKeys : « ${k} » est aussi la clé d'une édition`)
+    else if (vues.has(k.toLowerCase())) ecart(`${ou}.formerKeys : « ${k} » mène à deux éditions`)
+    vues.add(k.toLowerCase())
+  }
   return e
 }
 

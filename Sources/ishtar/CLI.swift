@@ -983,7 +983,7 @@ struct Corriger: AsyncParsableCommand {
     @Flag(name: .long, help: "Correction faite par un humain : la fiche passe en confiance haute (sinon elle reste « probable », et les passes automatiques pourront la reprendre).")
     var humain = false
 
-    @Flag(name: .long, help: "Correction vérifiée sur pièces par deux lecteurs : inscrite comme vérification (preuve exigée), la fiche passe en confiance haute.")
+    @Flag(name: .long, help: "Correction vérifiée sur pièces par deux lecteurs : inscrite comme vérification (preuve et sha256 exigés ; l'empreinte est contrôlée avant toute écriture), la fiche passe en confiance haute.")
     var surPieces = false
 
     @Flag(name: .long, help: "Écrit les corrections (sinon : seulement vérifier qu'on trouve chaque fichier).")
@@ -1025,6 +1025,17 @@ struct Corriger: AsyncParsableCommand {
             guard let titre = c.titre, let auteurs = c.auteurs else { print("   titre ou auteurs manquants"); continue }
             print("\(c.fichier)\n   → \(auteurs.joined(separator: " ; ")) — \(titre) (\(c.annee ?? "s.d."))")
             if surPieces, (c.preuve ?? "").trimmingCharacters(in: .whitespaces).isEmpty { print("   preuve manquante : rien d'écrit"); continue }
+            if surPieces {
+                // L'empreinte se contrôle avant d'écrire quoi que ce soit : une entrée
+                // dont les pages lues ne sont pas celles du fichier n'est pas appliquée.
+                guard let sha = c.sha256, !sha.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    print("   sha256 manquant : rien d'écrit"); continue
+                }
+                let actual = try await database.pool.read { try String.fetchOne($0, sql: "SELECT contentHash FROM document WHERE id = ?", arguments: [target.documentId]) }
+                guard actual?.lowercased() == sha.lowercased() else {
+                    print("   empreinte différente : rien d'écrit"); continue
+                }
+            }
             guard appliquer else { continue }
             try await store.applyUserEdit(workId: target.workId, editionId: target.editionId, documentId: target.documentId,
                                           edit: RecordEdit(title: titre, authors: auteurs, year: c.edition ?? c.annee,
@@ -1053,7 +1064,7 @@ struct Corriger: AsyncParsableCommand {
 
 struct Attester: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Inscrit la vérification sur pièces de fichiers dont la fiche est juste (JSON : fichier, sha256, lecteurs, preuve). La fiche passe en confiance haute."
+        abstract: "Inscrit la vérification sur pièces de fichiers dont la fiche est juste (JSON : fichier, sha256 obligatoire, lecteurs, preuve). La fiche passe en confiance haute."
     )
 
     struct Entree: Decodable {
@@ -1084,10 +1095,11 @@ struct Attester: AsyncParsableCommand {
             guard let target = try await store.document(named: e.fichier) else {
                 print("introuvable ou ambigu : \(e.fichier)"); refus += 1; continue
             }
-            if let sha = e.sha256 {
-                let actual = try await database.pool.read { try String.fetchOne($0, sql: "SELECT contentHash FROM document WHERE id = ?", arguments: [target.documentId]) }
-                guard actual?.lowercased() == sha.lowercased() else { print("empreinte différente : \(e.fichier)"); refus += 1; continue }
+            guard let sha = e.sha256, !sha.trimmingCharacters(in: .whitespaces).isEmpty else {
+                print("sha256 manquant : \(e.fichier)"); refus += 1; continue
             }
+            let actual = try await database.pool.read { try String.fetchOne($0, sql: "SELECT contentHash FROM document WHERE id = ?", arguments: [target.documentId]) }
+            guard actual?.lowercased() == sha.lowercased() else { print("empreinte différente : \(e.fichier)"); refus += 1; continue }
             guard appliquer else { continue }
             try await store.recordVerification(documentId: target.documentId, readers: e.lecteurs ?? par, proof: e.preuve, expectedHash: e.sha256)
             faits += 1

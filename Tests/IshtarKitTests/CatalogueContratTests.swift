@@ -103,6 +103,62 @@ struct CatalogueContratTests {
         #expect(texte.contains("conforme au contrat v1"), "\(texte)")
     }
 
+    @Test("Le contrat attrape une ancienne clé égale à une clé vivante, ou menant à deux éditions")
+    func ancienneCleEgaleCleVivante() async throws {
+        guard let node = Self.node() else { return }
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("ishtar-contrat-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: tmp) }
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let out = tmp.appendingPathComponent("Catalogue publié")
+        let db = try await bibliotheque(at: tmp.appendingPathComponent("catalog.sqlite"))
+        // Une vraie ancienne clé : le catalogue est conforme.
+        try await db.pool.write { conn in
+            let id = try #require(try UUID.fetchOne(conn, sql: "SELECT editionId FROM edition_key WHERE key LIKE 'Adorno%'"))
+            try RetiredKey(key: "Wiesengrund1951Minima", editionId: id, replacedBy: nil, reason: "essai").insert(conn)
+        }
+        _ = try await CatalogPublisher(db: db).publish(root: root, rules: PublicationRules(), to: out)
+        let manifeste = out.appendingPathComponent("catalogue.json")
+        let verificateur = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("contrats/catalogue-publie.mjs")
+        func verifier(_ fichier: URL) throws -> (Int32, String) {
+            let process = Process()
+            process.executableURL = node
+            process.arguments = [verificateur.path, fichier.path]
+            let sortie = Pipe()
+            process.standardOutput = sortie
+            process.standardError = sortie
+            try process.run()
+            process.waitUntilExit()
+            return (process.terminationStatus, String(decoding: sortie.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+        }
+        var racine = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: manifeste)) as? [String: Any])
+        var editions = try #require(racine["editions"] as? [[String: Any]])
+        let livre = try #require(editions.firstIndex { $0["title"] as? String == "Minima moralia" })
+        #expect(editions[livre]["formerKeys"] as? [String] == ["Wiesengrund1951Minima"])
+        let (ok, texteOk) = try verifier(manifeste)
+        #expect(ok == 0, "\(texteOk)")
+
+        // Une ancienne clé qui est la clé vivante d'une autre édition : écart.
+        let autre = try #require(editions.firstIndex { $0["title"] as? String == "Sans auteur" })
+        let vivante = try #require(editions[autre]["key"] as? String)
+        editions[livre]["formerKeys"] = [vivante]
+        racine["editions"] = editions
+        let faux = tmp.appendingPathComponent("faux.json")
+        try JSONSerialization.data(withJSONObject: racine).write(to: faux)
+        let (ko, texteKo) = try verifier(faux)
+        #expect(ko != 0 && texteKo.contains("est aussi la clé d'une édition"), "\(texteKo)")
+
+        // La même ancienne clé sur deux éditions : écart.
+        editions[livre]["formerKeys"] = ["Wiesengrund1951Minima"]
+        editions[autre]["formerKeys"] = ["wiesengrund1951minima"]
+        racine["editions"] = editions
+        try JSONSerialization.data(withJSONObject: racine).write(to: faux)
+        let (ko2, texteKo2) = try verifier(faux)
+        #expect(ko2 != 0 && texteKo2.contains("mène à deux éditions"), "\(texteKo2)")
+    }
+
     /// Node, s'il est installé (le test du format Swift reste valable sans lui).
     private static func node() -> URL? {
         let chemins = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
