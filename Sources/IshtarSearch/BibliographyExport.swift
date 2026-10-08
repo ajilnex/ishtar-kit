@@ -53,7 +53,8 @@ public enum BibliographyExport {
         if let former = e.formerKeys, !former.isEmpty { fields.append(("ids", former.joined(separator: ","))) }
         var lines = ["@\(type){\(e.key),"]
         for (i, f) in fields.enumerated() {
-            lines.append("  \(f.0) = {\(escape(f.1))}\(i == fields.count - 1 ? "" : ",")")
+            // Les clés (ids) ne s'échappent pas, comme la clé d'entrée : « _ » y est légitime.
+            lines.append("  \(f.0) = {\(f.0 == "ids" ? f.1 : escape(f.1))}\(i == fields.count - 1 ? "" : ",")")
         }
         lines.append("}")
         return lines.joined(separator: "\n")

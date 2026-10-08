@@ -303,6 +303,13 @@ public struct CatalogStore: Sendable {
         try await db.pool.write { conn in
             guard var document = try Document.fetchOne(conn, key: documentId) else { return }
 
+            // Comme pour merge : une édition à clé figée ne reste pas sans fichier (sa clé ne mènerait nulle part).
+            if let oldEdition = document.editionId,
+               let key = try EditionKey.fetchOne(conn, key: oldEdition), key.origin != .generated,
+               try Document.filter(Column("editionId") == oldEdition && Column("id") != documentId).fetchCount(conn) == 0 {
+                throw DatabaseError(message: "L’édition porte une clé stabilisée (\(key.key)) : on ne détache pas son dernier fichier.")
+            }
+
             let stem = (document.originalFileName as NSString).deletingPathExtension
             let work = Work(title: stem, curationStatus: .needsReview, confidence: .low)
             try work.insert(conn)

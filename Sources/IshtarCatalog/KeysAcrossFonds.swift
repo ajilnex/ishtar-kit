@@ -70,6 +70,10 @@ extension CatalogStore {
                 }
                 try conn.execute(sql: "UPDATE edition_key SET key = ?, origin = ? WHERE editionId = ?",
                                  arguments: [target, EditionKey.Origin.stable.rawValue, editionId])
+                // Le déclencheur a laissé une pierre (sauf pour une clé provisoire) : la liste la connaît.
+                if (row["origin"] as String) != EditionKey.Origin.generated.rawValue {
+                    stones[key.lowercased()] = editionId
+                }
                 local.remove(key.lowercased())
                 local.insert(target.lowercased())
                 changes.append((key, target))

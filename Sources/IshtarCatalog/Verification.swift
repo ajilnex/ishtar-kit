@@ -91,6 +91,16 @@ extension CatalogStore {
         }
     }
 
+    /// Contrôle d'une entrée « sur pièces » avant toute écriture : preuve non vide,
+    /// `sha256` donné et égal à l'empreinte du document. Rend la raison du refus, ou nil.
+    public func proofRefusal(documentId: UUID, proof: String?, sha256: String?) async throws -> String? {
+        if (proof ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "preuve manquante" }
+        guard let sha = sha256, !sha.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "sha256 manquant" }
+        let actual = try await db.pool.read { try String.fetchOne($0, sql: "SELECT contentHash FROM document WHERE id = ?", arguments: [documentId]) }
+        guard actual?.lowercased() == sha.lowercased() else { return "empreinte différente" }
+        return nil
+    }
+
     /// Le sous-titre d'une œuvre (complément du titre, RDA), à part du titre.
     public func setSubtitle(_ subtitle: String?, forWork workId: UUID) async throws {
         try await db.pool.write { conn in

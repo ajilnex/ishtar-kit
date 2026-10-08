@@ -996,15 +996,23 @@ struct Corriger: AsyncParsableCommand {
         let day = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
         var done = 0
         for c in corrections {
-            if c.detacher == true, appliquer, let first = try await store.document(named: c.fichier) {
-                try await store.detach(documentId: first.documentId)
-            }
-            guard let target = try await store.document(named: c.fichier) else {
+            guard var target = try await store.document(named: c.fichier) else {
                 print("introuvable ou ambigu : \(c.fichier)"); continue
+            }
+            // Détacher vient après tous les contrôles : une entrée refusée ne change rien.
+            func detacher() async throws -> Bool {
+                guard c.detacher == true, appliquer else { return true }
+                do { try await store.detach(documentId: target.documentId) }
+                catch { print("   détachement refusé : \(error)"); return false }
+                guard let moved = try await store.document(named: c.fichier) else { return false }
+                target = moved
+                return true
             }
             if c.nonBiblio == true {
                 print("\(c.fichier)\n   → _NON_BIBLIO")
-                guard appliquer, let path = try await store.path(ofDocument: target.documentId) else { continue }
+                guard appliquer else { continue }
+                guard try await detacher() else { continue }
+                guard let path = try await store.path(ofDocument: target.documentId) else { continue }
                 let dir = (path as NSString).deletingLastPathComponent
                 let destination = ((dir as NSString).appendingPathComponent("_NON_BIBLIO") as NSString)
                     .appendingPathComponent((path as NSString).lastPathComponent)
@@ -1024,19 +1032,11 @@ struct Corriger: AsyncParsableCommand {
             }
             guard let titre = c.titre, let auteurs = c.auteurs else { print("   titre ou auteurs manquants"); continue }
             print("\(c.fichier)\n   → \(auteurs.joined(separator: " ; ")) — \(titre) (\(c.annee ?? "s.d."))")
-            if surPieces, (c.preuve ?? "").trimmingCharacters(in: .whitespaces).isEmpty { print("   preuve manquante : rien d'écrit"); continue }
-            if surPieces {
-                // L'empreinte se contrôle avant d'écrire quoi que ce soit : une entrée
-                // dont les pages lues ne sont pas celles du fichier n'est pas appliquée.
-                guard let sha = c.sha256, !sha.trimmingCharacters(in: .whitespaces).isEmpty else {
-                    print("   sha256 manquant : rien d'écrit"); continue
-                }
-                let actual = try await database.pool.read { try String.fetchOne($0, sql: "SELECT contentHash FROM document WHERE id = ?", arguments: [target.documentId]) }
-                guard actual?.lowercased() == sha.lowercased() else {
-                    print("   empreinte différente : rien d'écrit"); continue
-                }
+            if surPieces, let refus = try await store.proofRefusal(documentId: target.documentId, proof: c.preuve, sha256: c.sha256) {
+                print("   \(refus) : rien d'écrit"); continue
             }
             guard appliquer else { continue }
+            guard try await detacher() else { continue }
             try await store.applyUserEdit(workId: target.workId, editionId: target.editionId, documentId: target.documentId,
                                           edit: RecordEdit(title: titre, authors: auteurs, year: c.edition ?? c.annee,
                                                            publisher: c.editeur, language: c.langue, isbn13: c.isbn))
@@ -1095,11 +1095,9 @@ struct Attester: AsyncParsableCommand {
             guard let target = try await store.document(named: e.fichier) else {
                 print("introuvable ou ambigu : \(e.fichier)"); refus += 1; continue
             }
-            guard let sha = e.sha256, !sha.trimmingCharacters(in: .whitespaces).isEmpty else {
-                print("sha256 manquant : \(e.fichier)"); refus += 1; continue
+            if let raison = try await store.proofRefusal(documentId: target.documentId, proof: e.preuve, sha256: e.sha256) {
+                print("\(raison) : \(e.fichier)"); refus += 1; continue
             }
-            let actual = try await database.pool.read { try String.fetchOne($0, sql: "SELECT contentHash FROM document WHERE id = ?", arguments: [target.documentId]) }
-            guard actual?.lowercased() == sha.lowercased() else { print("empreinte différente : \(e.fichier)"); refus += 1; continue }
             guard appliquer else { continue }
             try await store.recordVerification(documentId: target.documentId, readers: e.lecteurs ?? par, proof: e.preuve, expectedHash: e.sha256)
             faits += 1

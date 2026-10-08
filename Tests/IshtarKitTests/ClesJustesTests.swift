@@ -140,7 +140,7 @@ struct ClesJustesTests {
                                  path: "\(root)/Adorno.pdf", hash: "aaa")
             let nonLu = try edition(conn, title: "Dialektik der Aufklärung", author: "Max Horkheimer", year: "1944",
                                     key: "Horkheimer1944Dialektik", path: "\(root)/Horkheimer.pdf", hash: "bbb")
-            try RetiredKey(key: "Wiesengrund1951Minima", editionId: lu.edition, replacedBy: "Adorno1951Minima", reason: "essai").insert(conn)
+            try RetiredKey(key: "Wiesengrund_1951Minima", editionId: lu.edition, replacedBy: "Adorno1951Minima", reason: "essai").insert(conn)
             return (lu, nonLu)
         }
         let store = CatalogStore(db: db)
@@ -157,8 +157,8 @@ struct ClesJustesTests {
         let garde = PublicationRules(requireVerification: true)
         let (catalogue, report) = try await CatalogPublisher(db: db).build(root: root, rules: garde)
         #expect(catalogue.editions.map(\.key) == ["Adorno1951Minima"])
-        #expect(catalogue.editions.first?.formerKeys == ["Wiesengrund1951Minima"])
-        #expect(BibliographyExport.bibtex(catalogue.editions[0]).contains("ids = {Wiesengrund1951Minima}"))
+        #expect(catalogue.editions.first?.formerKeys == ["Wiesengrund_1951Minima"])
+        #expect(BibliographyExport.bibtex(catalogue.editions[0]).contains("ids = {Wiesengrund_1951Minima}"))
         #expect(report.excludedUnverified == 1)
         #expect(try await CatalogPublisher(db: db).build(root: root, rules: PublicationRules()).0.editions.count == 2)
 
@@ -312,5 +312,87 @@ struct ClesJustesTests {
         }
         #expect(cles == ["B2000Un"])
         #expect(pierres == ["Ancienne-pub"])   // ni « supprimée » pour le privé, ni sa pierre
+    }
+
+    // MARK: Relecture du 08/10
+
+    @Test("proofRefusal : preuve et sha256 obligatoires, empreinte égale, avant toute écriture")
+    func proofRefusal() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let doc = try await db.pool.write { try edition($0, title: "Un", author: "A B", year: "2000", key: "B2000Un", path: "/lib/a.pdf", hash: "abc").document }
+        let store = CatalogStore(db: db)
+        #expect(try await store.proofRefusal(documentId: doc, proof: nil, sha256: "abc") == "preuve manquante")
+        #expect(try await store.proofRefusal(documentId: doc, proof: " ", sha256: "abc") == "preuve manquante")
+        #expect(try await store.proofRefusal(documentId: doc, proof: "p-1", sha256: nil) == "sha256 manquant")
+        #expect(try await store.proofRefusal(documentId: doc, proof: "p-1", sha256: "  ") == "sha256 manquant")
+        #expect(try await store.proofRefusal(documentId: doc, proof: "p-1", sha256: "deadbeef") == "empreinte différente")
+        #expect(try await store.proofRefusal(documentId: doc, proof: "p-1", sha256: "ABC") == nil)
+    }
+
+    @Test("detach : refusé pour le dernier fichier d'une édition à clé figée, permis sinon")
+    func detachGuard() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let (seul, double1, simple) = try await db.pool.write { conn -> (UUID, UUID, UUID) in
+            let seul = try edition(conn, title: "Un", author: "A B", year: "2000", key: "B2000Un", path: "/lib/a.pdf", hash: "a").document
+            let d = try edition(conn, title: "Deux", author: "C D", year: "2001", key: "D2001Deux", path: "/lib/b.pdf", hash: "b")
+            try Document(editionId: d.edition, filePath: "/lib/b2.pdf", originalFileName: "b2.pdf", fileSize: 10, contentHash: "b2",
+                         format: .pdf, curationStatus: .recognized).insert(conn)
+            let p = try edition(conn, title: "Trois", author: "E F", year: "2002", key: "F2002Trois", origin: .generated, path: "/lib/c.pdf", hash: "c").document
+            return (seul, d.document, p)
+        }
+        let store = CatalogStore(db: db)
+        await #expect(throws: DatabaseError.self) { try await store.detach(documentId: seul) }
+        try await store.detach(documentId: double1)
+        try await store.detach(documentId: simple)
+        let ed = try await db.pool.read { try Document.fetchOne($0, key: seul)?.editionId }
+        #expect(try await store.key(forEdition: #require(ed))?.key == "B2000Un")
+    }
+
+    @Test("Le déclencheur BEFORE INSERT refuse, par un vrai INSERT, une clé retirée d'une autre édition")
+    func beforeInsertTrigger() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let (a, neuve) = try await db.pool.write { conn -> (UUID, UUID) in
+            let a = try edition(conn, title: "Un", author: "A B", year: "2000", key: "B2000Un", path: "/lib/a.pdf", hash: "a").edition
+            let neuve = try edition(conn, title: "Deux", author: "C D", year: "2001", path: "/lib/b.pdf", hash: "b").edition   // sans clé
+            try RetiredKey(key: "Ancienne2000", editionId: a, replacedBy: "B2000Un", reason: "essai").insert(conn)
+            return (a, neuve)
+        }
+        do {
+            try await db.pool.write { try $0.execute(sql: "INSERT INTO edition_key (editionId, key, origin, dateAssigned) VALUES (?, 'ANCIENNE2000', 'manual', datetime('now'))", arguments: [neuve]) }
+            Issue.record("l'INSERT aurait dû être refusé")
+        } catch let error as DatabaseError {
+            #expect(error.message?.contains("clé retirée") == true)
+        }
+        #expect(try await db.pool.read { try EditionKey.fetchOne($0, key: neuve) } == nil)
+        // L'édition d'origine, elle, peut la reprendre par INSERT.
+        try await db.pool.write { conn in
+            try conn.execute(sql: "DELETE FROM edition_key WHERE editionId = ?", arguments: [a])
+            try conn.execute(sql: "INSERT INTO edition_key (editionId, key, origin, dateAssigned) VALUES (?, 'Ancienne2000', 'manual', datetime('now'))", arguments: [a])
+        }
+        #expect(try await CatalogStore(db: db).key(forEdition: a)?.key == "Ancienne2000")
+    }
+
+    @Test("Deux passages de séparation des fonds réussissent, avec des pierres ; la branche « même édition » aussi")
+    func twoSeparationPasses() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let (b, c) = try await db.pool.write { conn -> (UUID, UUID) in
+            let b = try edition(conn, title: "Deux", author: "C D", year: "2001", key: "D2001Deux", origin: .stable, path: "/lib/b.pdf", hash: "hb").edition
+            let c = try edition(conn, title: "Trois", author: "E F", year: "2002", key: "F2002Trois", origin: .stable, path: "/lib/c.pdf", hash: "hc").edition
+            return (b, c)
+        }
+        let store = CatalogStore(db: db)
+        let ailleurs: [String: OtherFondsKey] = [
+            "D2001Deux": OtherFondsKey(hashes: ["zzz"]),            // autre livre : b reçoit une clé libre
+            "F2002TroisAilleurs": OtherFondsKey(hashes: ["hc"]),    // même fichier que c : c prend cette clé
+        ]
+        let un = try await store.separateKeys(from: ailleurs)
+        #expect(un.count == 2)
+        let deux = try await store.separateKeys(from: ailleurs)   // plus de « SQLite error 19 »
+        #expect(deux.isEmpty)
+        #expect(try await store.key(forEdition: c)?.key == "F2002TroisAilleurs")
+        let pierres = try await db.pool.read { try RetiredKey.fetchAll($0).map { $0.key.lowercased() }.sorted() }
+        #expect(pierres == ["d2001deux", "f2002trois"])
+        let k = try #require(try await store.key(forEdition: b)?.key)
+        #expect(k != "D2001Deux")
     }
 }
