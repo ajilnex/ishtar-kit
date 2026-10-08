@@ -126,7 +126,7 @@ struct FilenameParserTests {
         #expect(guess.isbn13 == "9781234567897")
     }
 
-    @Test("Sans-date ND et suffixe de copie (conventions de la Bibliothèque céleste)")
+    @Test("Sans-date ND et suffixe de copie (convention Auteur_Année_Titre)")
     func noDateAndCopySuffix() {
         let sellars = FilenameParser.parse(fileName: "Sellars_ND_Kant-s-Transcendental-Idealism.txt")
         #expect(sellars.confidence == .structured)

@@ -27,18 +27,18 @@ struct LibraryRelocationTests {
 
     @Test("Les documents et le dossier source suivent la nouvelle racine")
     func relocatesPrefix() async throws {
-        let db = try await seed(["/a/Bibliothèque céleste/Kant_1781_Critique.pdf",
-                                 "/a/Bibliothèque céleste/Phéno/Hegel_1807_Phenomenologie.epub",
+        let db = try await seed(["/a/Ma bibliothèque/Kant_1781_Critique.pdf",
+                                 "/a/Ma bibliothèque/Phéno/Hegel_1807_Phenomenologie.epub",
                                  "/a/Autre/Intrus.pdf"],
-                                root: "/a/Bibliothèque céleste")
+                                root: "/a/Ma bibliothèque")
         let moved = try await CatalogStore(db: db)
-            .relocateLibrary(from: "/a/Bibliothèque céleste/", to: "/b/Etagères/Bibliothèque céleste")
+            .relocateLibrary(from: "/a/Ma bibliothèque/", to: "/b/Rayonnages/Ma bibliothèque")
 
         #expect(moved == 2)
         #expect(try await paths(db) == ["/a/Autre/Intrus.pdf",
-                                        "/b/Etagères/Bibliothèque céleste/Kant_1781_Critique.pdf",
-                                        "/b/Etagères/Bibliothèque céleste/Phéno/Hegel_1807_Phenomenologie.epub"])
-        #expect(try await CatalogStore(db: db).sourceFolderPaths() == ["/b/Etagères/Bibliothèque céleste"])
+                                        "/b/Rayonnages/Ma bibliothèque/Kant_1781_Critique.pdf",
+                                        "/b/Rayonnages/Ma bibliothèque/Phéno/Hegel_1807_Phenomenologie.epub"])
+        #expect(try await CatalogStore(db: db).sourceFolderPaths() == ["/b/Rayonnages/Ma bibliothèque"])
     }
 
     @Test("« _ » et « % » ne sont pas des jokers ; un voisin au nom proche n'est pas emporté")
