@@ -58,13 +58,13 @@ public enum TypographyRestorer {
             guard let range = embedded.range(of: separator) else { continue }
             let head = embedded[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
             var tail = embedded[range.upperBound...].trimmingCharacters(in: .whitespaces)
-            // Scories des sites de téléchargement : « (Z-Library) », « (German
-            // Edition) », « (Vincent Kaufmann) » en fin de titre.
+            // Scories des sites de téléchargement : « (Nom du site) », « (German
+            // Edition) », « (Prénom Nom) » en fin de titre.
             while let paren = tail.range(of: #"\s*\([^()]*\)\s*$"#, options: .regularExpression) {
                 tail.removeSubrange(paren)
             }
             let lowered = tail.lowercased()
-            let junk = ["z-library", "pdfdrive", "libgen", "anna's archive", "www.", ".com", ".pdf", ".epub", ".mobi", "edition)"]
+            let junk = ["z-library", "pdfdrive", "libgen", "www.", ".com", ".pdf", ".epub", ".mobi", "edition)"]
             // Un texte répété deux fois de suite trahit une métadonnée bricolée.
             let words = tail.split(separator: " ")
             let doubled = words.count >= 4 && words.count % 2 == 0

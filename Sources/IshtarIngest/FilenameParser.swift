@@ -10,7 +10,7 @@ public enum FilenameParser {
     public static func parse(fileName: String) -> MetadataGuess {
         let stem = (fileName as NSString).deletingPathExtension
 
-        if let guess = parseAnnasArchive(stem: stem) { return guess }
+        if let guess = parseTiretsDoubles(stem: stem) { return guess }
         if let guess = parseLabel(stem: stem) { return guess }
         if let guess = parseAuthorYearTitle(stem: stem) { return guess }
         if let guess = parseZLibrary(stem: stem) { return guess }
@@ -36,9 +36,9 @@ public enum FilenameParser {
         return MetadataGuess(title: title, author: author == "Anonyme" ? nil : author, year: year, confidence: .structured)
     }
 
-    /// Convention `Titre -- Auteur -- Éditeur, Année -- isbn13 XXXX -- hash -- Anna's Archive`.
+    /// Convention `Titre -- Auteur -- Éditeur, Année -- isbn13 XXXX -- empreinte -- origine`.
     /// Les champs sont séparés par ` -- ` ; leur nombre et leur ordre varient, on reste prudent.
-    private static func parseAnnasArchive(stem: String) -> MetadataGuess? {
+    private static func parseTiretsDoubles(stem: String) -> MetadataGuess? {
         let parts = stem.components(separatedBy: " -- ").map {
             $0.trimmingCharacters(in: .whitespaces)
         }
@@ -176,7 +176,7 @@ public enum FilenameParser {
         return MetadataGuess(title: title, year: year, confidence: .fallback)
     }
 
-    /// Convention Scribd : préfixe numérique `168204597-Derrida-Jacques-La-Voix...`.
+    /// Convention Scribd : préfixe numérique `172233905-Fontaine-Claire-Le-Chant...`.
     /// L'ID de 6 à 12 chiffres est écarté, les tirets deviennent des espaces. Aucun
     /// auteur fiable : reste un repli, mais avec un titre propre (l'étage 2 fera le reste).
     private static func parseScribd(stem: String) -> MetadataGuess? {

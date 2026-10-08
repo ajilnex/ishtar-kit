@@ -115,15 +115,15 @@ struct FilenameParserTests {
         #expect(guess.title == "Critique de la raison pure")
     }
 
-    @Test("Convention Anna's Archive avec isbn13 et année")
-    func annasArchive() {
-        let name = "L' établi -- Robert Linhardt -- Double, Nouvelle édition, Paris, 2011 -- Les Éditions de Minuit -- isbn13 9782707302144 -- 6518c6632001dbe02d1d8574532366bd -- Anna's Archive.epub"
+    @Test("Convention à doubles tirets avec isbn13 et année")
+    func doubleDashConvention() {
+        let name = "L' orée des cendres -- Hélène Marchand -- Biblio, Nouvelle édition, Lyon, 2011 -- Éditions de la Fontaine Claire -- isbn13 9781234567897 -- 7e54d72006916254c651aa057810ba4f -- exemple.org.epub"
         let guess = FilenameParser.parse(fileName: name)
         #expect(guess.confidence == .structured)
-        #expect(guess.title == "L' établi")
-        #expect(guess.author == "Robert Linhardt")
+        #expect(guess.title == "L' orée des cendres")
+        #expect(guess.author == "Hélène Marchand")
         #expect(guess.year == "2011")
-        #expect(guess.isbn13 == "9782707302144")
+        #expect(guess.isbn13 == "9781234567897")
     }
 
     @Test("Sans-date ND et suffixe de copie (conventions de la Bibliothèque céleste)")
@@ -142,31 +142,31 @@ struct FilenameParserTests {
 
     @Test("Convention Z-Library avec auteur → structured")
     func zLibraryWithAuthor() {
-        let hegel = FilenameParser.parse(fileName: "Hegel, les actes de lesprit (Bernard Bourgeois) (Z-Library).pdf")
-        #expect(hegel.confidence == .structured)
-        #expect(hegel.title == "Hegel, les actes de lesprit")
-        #expect(hegel.author == "Bernard Bourgeois")
+        let simple = FilenameParser.parse(fileName: "Le cartographe, les routes de lhiver (Claire Fontaine) (Z-Library).pdf")
+        #expect(simple.confidence == .structured)
+        #expect(simple.title == "Le cartographe, les routes de lhiver")
+        #expect(simple.author == "Claire Fontaine")
 
         // Doublons entre crochets et marqueur de copie « (1) ».
-        let derrida = FilenameParser.parse(fileName: "Marges – de la philosophie (Derrida, Jacques [Derrida, Jacques]) (Z-Library)(1).epub")
-        #expect(derrida.confidence == .structured)
-        #expect(derrida.title == "Marges – de la philosophie")
-        #expect(derrida.author == "Derrida, Jacques")
+        let inverse = FilenameParser.parse(fileName: "Sentiers – de la lumière (Fontaine, Claire [Fontaine, Claire]) (Z-Library)(1).epub")
+        #expect(inverse.confidence == .structured)
+        #expect(inverse.title == "Sentiers – de la lumière")
+        #expect(inverse.author == "Fontaine, Claire")
 
         // Annotation nichée « (editor) » et variante Z-lib.org.
-        let webb = FilenameParser.parse(fileName: "The Nature of Reality (Richard Webb (editor)) (Z-lib.org).pdf")
-        #expect(webb.confidence == .structured)
-        #expect(webb.author == "Richard Webb")
-        #expect(webb.title == "The Nature of Reality")
+        let nichee = FilenameParser.parse(fileName: "The Shape of Weather (Alan Mercer (editor)) (Z-lib.org).pdf")
+        #expect(nichee.confidence == .structured)
+        #expect(nichee.author == "Alan Mercer")
+        #expect(nichee.title == "The Shape of Weather")
     }
 
     @Test("Z-Library sans auteur fiable → repli titre propre")
     func zLibraryDoubtfulAuthor() {
         // Dernière parenthèse = marqueur d'édition, pas un nom.
-        let edition = FilenameParser.parse(fileName: "L'Attaque des Titans Chapitre 1 (French Edition) (Z-Library).epub")
+        let edition = FilenameParser.parse(fileName: "L'Odyssée des Cerfs Chapitre 1 (French Edition) (Z-Library).epub")
         #expect(edition.confidence == .fallback)
         #expect(edition.author == nil)
-        #expect(edition.title == "L'Attaque des Titans Chapitre 1")
+        #expect(edition.title == "L'Odyssée des Cerfs Chapitre 1")
 
         // Dernière parenthèse = année seule.
         let year = FilenameParser.parse(fileName: "Un manuscrit anonyme (2019) (Z-Library).pdf")
@@ -177,14 +177,14 @@ struct FilenameParserTests {
 
     @Test("Convention Scribd → repli avec titre nettoyé sans l'ID")
     func scribdNumericPrefix() {
-        let foucault = FilenameParser.parse(fileName: "111503479-Surveiller-et-Punir.pdf")
-        #expect(foucault.confidence == .fallback)
-        #expect(foucault.author == nil)
-        #expect(foucault.title == "Surveiller et Punir")
+        let simple = FilenameParser.parse(fileName: "104827365-Le-Pont-des-Voyelles.pdf")
+        #expect(simple.confidence == .fallback)
+        #expect(simple.author == nil)
+        #expect(simple.title == "Le Pont des Voyelles")
 
-        let derrida = FilenameParser.parse(fileName: "168204597-Derrida-Jacques-La-Voix-et-le-Phenomene.pdf")
-        #expect(derrida.confidence == .fallback)
-        #expect(derrida.title == "Derrida Jacques La Voix et le Phenomene")
+        let avecAuteur = FilenameParser.parse(fileName: "172233905-Fontaine-Claire-Le-Chant-des-Dunes.pdf")
+        #expect(avecAuteur.confidence == .fallback)
+        #expect(avecAuteur.title == "Fontaine Claire Le Chant des Dunes")
     }
 
     @Test("Nom chaotique → repli honnête, à faire vérifier")
@@ -270,7 +270,7 @@ struct IngestTests {
     func skipsSidecarFolders() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ishtar-sdr-\(UUID().uuidString)")
-        let sidecar = root.appendingPathComponent("Lettre au père (Franz Kafka) (Z-Library).sdr")
+        let sidecar = root.appendingPathComponent("Le chant des dunes (Claire Fontaine) (Nom du site).sdr")
         try FileManager.default.createDirectory(at: sidecar, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 

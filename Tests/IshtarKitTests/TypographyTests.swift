@@ -34,8 +34,8 @@ struct TypographyTests {
         #expect(TypographyRestorer.restoredSubtitle(current: "Debt", embedded: "Debt") == nil)
         #expect(TypographyRestorer.restoredSubtitle(current: "Die Torah", embedded: "Die Torah: eine deutsche Übersetzung (German Edition)")?.subtitle
                 == "eine deutsche Übersetzung")
-        #expect(TypographyRestorer.restoredSubtitle(current: "Energy and Civilization", embedded: "Energy and Civilization: A History ( PDFDrive.com ).mobi") == nil)
-        #expect(TypographyRestorer.restoredSubtitle(current: "La Faute à Mallarmé", embedded: "La Faute à Mallarmé: Laventure (Vincent Kaufmann) (Z-Library)")?.subtitle == "Laventure")
+        #expect(TypographyRestorer.restoredSubtitle(current: "The Shape of Weather", embedded: "The Shape of Weather: A History ( Exemple.com ).mobi") == nil)
+        #expect(TypographyRestorer.restoredSubtitle(current: "Le Pont des Voyelles", embedded: "Le Pont des Voyelles: Laventure (Claire Fontaine) (Nom du site)")?.subtitle == "Laventure")
     }
 
     @Test("Auteur : même nom enrichi, ou nom complet du même nom de famille")
