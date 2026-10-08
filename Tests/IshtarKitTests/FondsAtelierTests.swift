@@ -116,9 +116,9 @@ struct FondsAtelierTests {
     func depot() throws {
         let fonds = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: fonds) }
-        try write(#"{"id":"yahor","nom":"Le fonds de Yahor","email":"y@x.fr","etat":"recu","fichiers":{},"envois":[]}"#,
+        try write(#"{"id":"camille","nom":"Le fonds de Camille","email":"c@x.fr","etat":"recu","fichiers":{},"envois":[]}"#,
                   to: fonds.appendingPathComponent("depot.json"))
-        #expect(try FondsAtelier.depot(in: fonds) == FondsAtelier.Depot(id: "yahor", nom: "Le fonds de Yahor", etat: "recu"))
+        #expect(try FondsAtelier.depot(in: fonds) == FondsAtelier.Depot(id: "camille", nom: "Le fonds de Camille", etat: "recu"))
     }
 
     /// La fiche qu'écrit Calibre à côté de chaque livre.

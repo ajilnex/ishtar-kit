@@ -9,7 +9,10 @@
 # des dizaines de fois plus rapide qu'en « build ».
 set -euo pipefail
 cd "${0:A:h}/../.."
-HOST=pyrosarx@100.111.201.93
+# L'hôte (utilisateur@adresse) n'est pas écrit dans ce dépôt public : variable
+# ISHTAR_LINUX_HOTE, ou première ligne de ~/.config/kenoseme/hote-linux.
+HOST=${ISHTAR_LINUX_HOTE:-$(head -n 1 "${HOME}/.config/kenoseme/hote-linux" 2>/dev/null || true)}
+[[ -n $HOST ]] || { echo "Hôte Linux inconnu : définir ISHTAR_LINUX_HOTE (utilisateur@adresse) ou ~/.config/kenoseme/hote-linux" >&2; exit 78; }
 ACTION=${1:-build}
 shift $(( $# > 0 ? 1 : 0 ))
 case $ACTION in

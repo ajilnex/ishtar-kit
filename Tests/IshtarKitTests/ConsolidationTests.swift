@@ -173,7 +173,7 @@ struct ReferenceIntegrityTests {
         #expect(LibraryLink.athanorCitation(key: "Adorno1951Minima") == "<Cite item=\"Adorno1951Minima\" />")
         #expect(LibraryLink.athanorCitation(key: "clé\"/>") == nil)
         #expect(LibraryLink.rayonsURL(base: "http://example.org", key: "Key") == nil)
-        #expect(LibraryLink.rayonsURL(base: "https://rayons.kenoseme.fr", key: "Key")?.fragment == "Key")
+        #expect(LibraryLink.rayonsURL(base: "https://bibliotheque.example.org", key: "Key")?.fragment == "Key")
     }
 
     @Test("L'export distingue citation et note personnelle et conserve le lien au passage")

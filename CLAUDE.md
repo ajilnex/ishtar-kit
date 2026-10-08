@@ -18,4 +18,5 @@ Règles dures :
 - Tout changement livre ses tests : `Scripts/swift-test.sh` vert.
 - Commentaires en français, sobres (contraintes, pas de narration).
 
-Épreuve du réel (lecture seule) : `swift run ishtar scan ~/SARx/Etagères/Bibliothèque\ céleste`
+Épreuve du réel (lecture seule) : `swift run ishtar scan <dossier de la bibliothèque>` (le chemin vit
+hors de ce dépôt, qui est public).
