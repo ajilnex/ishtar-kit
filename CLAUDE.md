@@ -17,6 +17,8 @@ Règles dures :
 - La correction humaine est le seul chemin vers la confiance `high`.
 - Tout changement livre ses tests : `Scripts/swift-test.sh` vert.
 - Commentaires en français, sobres (contraintes, pas de narration).
+- Dépôt public : exemples et tests n'emploient que des titres, auteurs, isbn et empreintes inventés ;
+  jamais un vrai nom de fichier, une source de livres, un chemin, un hôte ni un prénom de tiers.
 
 Épreuve du réel (lecture seule) : `swift run ishtar scan <dossier de la bibliothèque>` (le chemin vit
 hors de ce dépôt, qui est public).
