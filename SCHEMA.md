@@ -344,3 +344,61 @@ les identités des collections manuelles publiables et leurs appartenances ;
 les dossiers importés restent des rayonnages. Les identités sont qualifiées
 par fonds côté serveur. Cette version ne crée aucun droit d’écriture partagé.
 Les responsables éditoriaux restent dans `edition_creator`, distincts des auteurs.
+
+### T-037 lot 2 — import de la file Rayons
+
+`ishtar annotations-importer --db catalogue.sqlite --fonds fiction --ops lot.json
+[--appliquer]` ouvre un **catalogue existant**, sans créer ni exécuter de migration.
+La migration `v11_annotations_lecteur` et les collections restent inchangées.
+L'importateur `IshtarCatalog.AnnotationImport` n'ouvre aucun fichier de livre : le
+document est identifié par `document.contentHash`. Plusieurs documents de même
+empreinte donnent un rejet « document ambigu ».
+
+L'export attendu est `{fonds, ops:[{seq,opId,op,id,sha256,base,t,auteur,instantane}]}`.
+Le fonds configuré est obligatoire ; il doit correspondre à celui du lot et au
+champ `fonds` de chaque opération, s'il est présent. Les UUID d'annotation et de
+document sont liés par GRDB en **BLOB de 16 octets**, y compris
+`annotation_import.annotationId`, malgré le type TEXT déclaré historiquement.
+
+L'instantané complet reprend `id`, `sha256`, `citation`, `date`, `modifie` et les
+champs facultatifs `sorte`, `avant`, `apres`, `page`, `cfi`, `note`, `couleur`,
+`geometrie`, `auteur`, `origine`. Seuls `note` et `surlignement` (ou sorte absente)
+sont acceptés ; dessins, traits et SVG sont refusés. Citation non vide ≤ 2 000,
+contextes ≤ 48, note ≤ 20 000, page positive ; géométrie validée sur cette empreinte.
+Une géométrie historique mesurée sur un fichier remplacé reste acceptable en
+modification/retrait uniquement si elle est identique à celle du catalogue.
+L'auteur de l'opération fait autorité (l'auteur de l'instantané, s'il existe, doit
+coïncider). Les origines publiques `pdf`, `app`, `lecteur` sont traduites en
+`pdf`, `app`, `reader` ; l'origine absente devient `reader`.
+
+Une seule transaction traite les opérations par `seq`. Sans `--appliquer`, elle
+est annulée **après** simulation des opérations dépendantes et de leur journal.
+Une erreur SQLite annule également le lot entier. Un rejet métier laisse les
+autres opérations du lot se poursuivre.
+
+- `poser` exige `base: null` (ou absente) et une origine `lecteur` ou absente ;
+  un UUID déjà occupé sur le même
+  document n'est « déjà » que si l'instantané stocké est identique ; un UUID
+  occupé sur un autre document est toujours rejeté. Un UUID retiré par un import
+  réussi reste réservé dans le journal et ne peut pas être réattribué.
+- `modifier` et `retirer` exigent `dateModified == base` au millième et `t > base`.
+  Les dates ISO 8601 avec ou sans fractions sont acceptées. Une modification
+  fixe `dateModified = t` et préserve la création, l'origine et le Projet du catalogue.
+  Un retrait efface l'annotation ; son instantané reste dans la trace. Le lot 2
+  refuse explicitement le retrait d'une annotation d'origine `pdf` (« retrait PDF
+  non pris en charge »), dont la marque native resterait peinte dans le fichier.
+  Une couleur historique hors `klein`/`redon`, conforme à `^[a-z]{1,16}$`, est
+  acceptée pour modifier ou retirer
+  seulement si elle est identique à celle du catalogue ; elle ne peut être créée
+  ni substituée par une autre couleur historique.
+- `annotation_import.opId` empêche les doublons. `detail` contient le JSON
+  `{operation, motif?}`, donc l'instantané complet et le motif restent disponibles.
+  Un même `opId` portant une autre opération est rejeté (« opId réutilisé »).
+  Un rejet rejoué reste `rejete`, afin de ne pas l'acquitter comme importé.
+  Un lot étranger ou un identifiant de transport invalide n'écrit pas de trace.
+
+Le résultat JSON est
+`{resultats:[{opId,seq,resultat:"applique"|"deja"|"rejete",motif?}],appliquees,deja,rejetees}`.
+Les compteurs sont des entiers calculés sur les résultats ; les rejets comportent
+un motif. Aucun accès au réseau, aucune publication ni synchronisation n'est
+réalisé par cette commande.

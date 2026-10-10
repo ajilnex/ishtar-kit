@@ -25,7 +25,7 @@ struct IshtarCLI: AsyncParsableCommand {
             Embed.self, Find.self, ImportBibtex.self, ImportZotero.self,
             Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self,
             Traductions.self, Reunir.self, Ranger.self, Verifier.self, Corriger.self, Attester.self, Cles.self, Auteurs.self, Titres.self,
-            Prenoms.self, Doublons.self, Exporter.self, Annotations.self, AnnotationsOrigine.self, Fonds.self, CollectionCommand.self, Rattacher.self,
+            Prenoms.self, Doublons.self, Exporter.self, Annotations.self, AnnotationsOrigine.self, AnnotationsImporter.self, Fonds.self, CollectionCommand.self, Rattacher.self,
         ]
         #if canImport(Vision)
         liste.insert(OCRCompare.self, at: 6)
