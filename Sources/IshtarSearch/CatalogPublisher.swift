@@ -255,7 +255,14 @@ public struct CatalogPublisher: Sendable {
                 for k in ["kind", "note", "color"] { if let v: String = r[k], !v.isEmpty { l[k == "kind" ? "nature" : k == "color" ? "couleur" : k] = v } }
                 links.append(l)
             }
-            return try JSONSerialization.data(withJSONObject: ["annotations": notes, "encres": links],
+            // Reçus lus dans le même instantané que les annotations : une absence
+            // après import peut ainsi être reconnue sans dépendre des horloges.
+            let receipts = try Row.fetchAll(conn, sql: "SELECT opId, fonds, seq, result FROM annotation_import ORDER BY fonds, seq, opId")
+            let importations: [[String: Any]] = receipts.map { r in
+                ["opId": r["opId"] as String, "fonds": r["fonds"] as String,
+                 "seq": r["seq"] as Int64, "resultat": r["result"] as String]
+            }
+            return try JSONSerialization.data(withJSONObject: ["annotations": notes, "encres": links, "importations": importations],
                                               options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         }
     }

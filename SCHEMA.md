@@ -402,3 +402,12 @@ Le résultat JSON est
 Les compteurs sont des entiers calculés sur les résultats ; les rejets comportent
 un motif. Aucun accès au réseau, aucune publication ni synchronisation n'est
 réalisé par cette commande.
+
+### Reçus publiés de l’import du lecteur
+
+`corpus/annotations.json` expose aussi `importations`, avec `opId`, `fonds`,
+`seq` et `resultat`. Ces reçus sont lus dans le même instantané SQLite que les
+annotations, y compris si une annotation a ensuite été retirée dans Ishtar.
+Rayons peut ainsi cesser de projeter une opération importée sans comparer les
+horloges ni se fier à la date du catalogue. Aucun détail de conflit ni identité
+d’auteur ne figure dans les reçus. Le backend ne les expose pas au lecteur.

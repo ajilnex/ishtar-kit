@@ -150,4 +150,24 @@ struct PublisherTests {
         #expect(encres.first?["nature"] as? String == "reprise")
         #expect(try await CatalogPublisher.annotationsJSON(db: db, hashes: ["aaa"]) == json)
     }
+    @Test("Les reçus d'import restent publiés après suppression locale, sans détail privé")
+    func importReceipts() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        try await db.pool.write { conn in
+            try conn.execute(sql: "INSERT INTO annotation_import (opId, fonds, seq, result, detail, appliedAt) VALUES (?, ?, ?, ?, ?, ?)",
+                             arguments: ["operation", "ajil", 42, "applique", "detail-prive", Date()])
+        }
+        let data = try await CatalogPublisher.annotationsJSON(db: db, hashes: [])
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let receipts = try #require(object["importations"] as? [[String: Any]])
+        #expect(receipts.count == 1)
+        #expect(receipts[0]["opId"] as? String == "operation")
+        #expect(receipts[0]["fonds"] as? String == "ajil")
+        #expect(receipts[0]["seq"] as? Int == 42)
+        #expect(receipts[0]["resultat"] as? String == "applique")
+        #expect(!String(decoding: data, as: UTF8.self).contains("detail-prive"))
+        #expect((object["annotations"] as? [Any])?.isEmpty == true)
+        #expect(try await CatalogPublisher.annotationsJSON(db: db, hashes: []) == data)
+    }
+
 }
