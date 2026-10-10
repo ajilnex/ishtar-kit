@@ -340,6 +340,41 @@ public final class CatalogDatabase: Sendable {
                 """)
         }
 
+        migrator.registerMigration("v11_annotations_lecteur") { db in
+            // T-037 : les annotations venues du lecteur en ligne (Rayons) et la
+            // géométrie des surlignements des PDF. Additive : rien n'est réécrit.
+            // `kind` nil = surlignement ; `author` nil = le propriétaire de la
+            // bibliothèque ; `origin` nil = inconnue ; `geometry` : JSON (AnnotationGeometry).
+            try db.alter(table: "annotation") { t in
+                t.add(column: "kind", .text)
+                t.add(column: "author", .text)
+                t.add(column: "origin", .text)
+                t.add(column: "geometry", .text)
+            }
+            // Le dessin d'une annotation : les traits, et le SVG que le serveur en a tiré.
+            // `annotationId` a le type déclaré d'`annotation.id` : GRDB y range un
+            // BLOB de 16 octets, jamais du texte (ne pas le comparer à du texte en SQL brut).
+            try db.create(table: "annotation_drawing") { t in
+                t.column("annotationId", .text).primaryKey()
+                    .references("annotation", onDelete: .cascade)
+                t.column("strokes", .text).notNull()
+                t.column("svg", .text).notNull()
+                t.column("width", .double).notNull()
+                t.column("height", .double).notNull()
+            }
+            // Les opérations déjà importées depuis la file du lecteur : ce qui rend
+            // l'import idempotent (même `opId` rejoué = « déjà »).
+            try db.create(table: "annotation_import") { t in
+                t.column("opId", .text).primaryKey()
+                t.column("fonds", .text).notNull()
+                t.column("seq", .integer).notNull()
+                t.column("annotationId", .text)
+                t.column("result", .text).notNull()
+                t.column("detail", .text)
+                t.column("appliedAt", .datetime).notNull()
+            }
+        }
+
         // Les migrations suivantes (embeddings, artéfacts) arrivent avec les jalons M3–M4.
 
         return migrator

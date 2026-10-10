@@ -169,21 +169,41 @@ public struct CatalogPublisher: Sendable {
     /// `corpus/annotations.json` : `{ annotations: [...], encres: [...] }`,
     /// triés, sans date de génération (identique d'une publication à l'autre
     /// tant que rien ne change). Seuls les documents publiés y figurent.
+    ///
+    /// Une annotation : `id`, `sha256`, `citation`, puis, s'ils existent, `page`,
+    /// `cfi`, `avant`, `apres`, `note`, `couleur`, `date` (création, à la seconde) et,
+    /// depuis la v11 (T-037, des ajouts compatibles de la v1) : `sorte` (`note`,
+    /// `dessin`, `trait` ; absente = surlignement), `auteur` (absent = le propriétaire
+    /// de la bibliothèque), `origine` (`pdf`, `app`, `lecteur`), `modifie` (la dernière
+    /// modification, au millième), `geometrie`, et pour un dessin `dessin` et `svg`.
     static func annotationsJSON(db: CatalogDatabase, hashes: Set<String>) async throws -> Data {
         try await db.pool.read { conn in
             let rows = try Row.fetchAll(conn, sql: """
                 SELECT a.id AS id, d.contentHash AS sha, a.pageNumber AS page, a.cfi AS cfi, a.quote AS quote,
                        a.prefix AS prefix, a.suffix AS suffix, a.note AS note, a.color AS color,
-                       a.dateCreated AS created
+                       a.dateCreated AS created, a.dateModified AS modified,
+                       a.kind AS kind, a.author AS author, a.origin AS origin, a.geometry AS geometry,
+                       w.strokes AS strokes, w.svg AS svg, w.width AS width, w.height AS height
                 FROM annotation a JOIN document d ON d.id = a.documentId
+                LEFT JOIN annotation_drawing w ON w.annotationId = a.id
                 WHERE d.contentHash IS NOT NULL AND d.isMissing = 0
                 ORDER BY d.contentHash, a.pageNumber, a.dateCreated, a.id
                 """)
+            let precise = ISO8601DateFormatter()
+            precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let sortes = ["note": "note", "drawing": "dessin", "stroke": "trait"]
+            let origines = ["pdf": "pdf", "app": "app", "reader": "lecteur"]
             var kept = Set<String>()
             var notes: [[String: Any]] = []
             for r in rows {
                 let sha: String = r["sha"]
                 guard hashes.contains(sha) else { continue }
+                var sorte: String?
+                if let kind: String = r["kind"], !kind.isEmpty {
+                    // Une sorte que ce moteur ne connaît pas ne sort pas : un lecteur ne saurait qu'en faire.
+                    guard let connue = sortes[kind] else { continue }
+                    sorte = connue
+                }
                 let id = (r["id"] as UUID).uuidString
                 kept.insert(id)
                 var n: [String: Any] = ["id": id, "sha256": sha, "citation": r["quote"] as String]
@@ -192,6 +212,21 @@ public struct CatalogPublisher: Sendable {
                     if let v: String = r[col], !v.isEmpty { n[k] = v }
                 }
                 if let d: Date = r["created"] { n["date"] = ISO8601DateFormatter().string(from: d) }
+                if let d: Date = r["modified"] { n["modifie"] = precise.string(from: d) }
+                if let sorte { n["sorte"] = sorte }
+                if let v: String = r["author"], !v.isEmpty { n["auteur"] = v }
+                if let v: String = r["origin"], let o = origines[v] { n["origine"] = o }
+                // Une géométrie hors bornes ne sort pas : le lecteur retomberait sur du faux.
+                if let g: String = r["geometry"], let valide = AnnotationGeometry(json: g),
+                   let objet = try? JSONSerialization.jsonObject(with: Data(valide.json.utf8)) {
+                    n["geometrie"] = objet
+                }
+                if let strokes: String = r["strokes"], let svg: String = r["svg"],
+                   let traits = try? JSONSerialization.jsonObject(with: Data(strokes.utf8)) {
+                    let largeur: Double = r["width"] ?? 0, hauteur: Double = r["height"] ?? 0
+                    n["dessin"] = ["largeur": largeur, "hauteur": hauteur, "traits": traits] as [String: Any]
+                    n["svg"] = svg
+                }
                 notes.append(n)
             }
             let linkRows = try Row.fetchAll(conn, sql: """
