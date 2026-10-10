@@ -21,6 +21,14 @@ public struct PublishedCatalogue: Codable, Sendable, Equatable {
     /// Le fonds : de qui vient cette bibliothèque (provenance). Facultatif.
     public var fonds: PublishedFonds?
     public var editions: [PublishedEdition]
+    public var collections: [PublishedCollection]? = nil
+}
+
+/// Identité persistante d'une collection ; ses membres restent les œuvres du fonds.
+public struct PublishedCollection: Codable, Sendable, Equatable {
+    public var id: String
+    public var name: String
+    public var parentId: String?
 }
 
 /// La provenance d'une bibliothèque publiée : un identifiant court et stable
@@ -62,6 +70,7 @@ public struct PublishedEdition: Codable, Sendable, Equatable {
     public var discipline: String?
     /// Chemins des collections, du général au particulier (« inventaire/01 - Sources primaires »).
     public var collections: [String]
+    public var collectionIds: [String]? = nil
     public var status: String
     public var confidence: String
     public var dateAdded: Date
@@ -77,13 +86,15 @@ public struct PublishedPerson: Codable, Sendable, Equatable {
     public var idref: String?
     public var bnf: String?
     public var wikidata: String?
+    public var role: String? = nil
 
-    public init(name: String, sortName: String? = nil, idref: String? = nil, bnf: String? = nil, wikidata: String? = nil) {
+    public init(name: String, sortName: String? = nil, idref: String? = nil, bnf: String? = nil, wikidata: String? = nil, role: String? = nil) {
         self.name = name
         self.sortName = sortName
         self.idref = idref
         self.bnf = bnf
         self.wikidata = wikidata
+        self.role = role
     }
 }
 
@@ -93,6 +104,9 @@ public struct PublishedFile: Codable, Sendable, Equatable {
     public var path: String
     public var format: String
     public var size: Int64
+    public var label: String? = nil
+    public var note: String? = nil
+    public var preferred: Bool? = nil
 }
 
 /// Ce qui ne doit pas sortir de la machine. Les règles viennent de
@@ -293,10 +307,40 @@ public struct CatalogPublisher: Sendable {
             return (keys, paths, people, kinds)
         }
 
+        let (presentations, collectionRecords, memberships, editionPeople) = try await db.pool.read { conn in
+            var presentations: [UUID: DocumentPresentation] = [:]
+            for p in try DocumentPresentation.fetchAll(conn) { presentations[p.documentId] = p }
+            let records = try BookCollection.fetchAll(conn)
+            let byId = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+            func path(_ record: BookCollection, visited: Set<UUID> = []) -> String? {
+                guard record.sourceFolderPath == nil, !visited.contains(record.id) else { return nil }
+                guard let parentId = record.parentId else { return record.name }
+                guard let parent = byId[parentId], let prefix = path(parent, visited: visited.union([record.id])) else { return nil }
+                return prefix + "/" + record.name
+            }
+            let collections = records.filter { record in
+                guard let fullPath = path(record) else { return false }
+                return !rules.excludes(relativePath: fullPath)
+            }.map { PublishedCollection(id: $0.id.uuidString, name: $0.name, parentId: $0.parentId?.uuidString) }
+            var memberships: [UUID: [String]] = [:]
+            let ids = Set(collections.map(\.id))
+            for item in try CollectionItem.fetchAll(conn) where ids.contains(item.collectionId.uuidString) {
+                memberships[item.workId, default: []].append(item.collectionId.uuidString)
+            }
+            var responsible: [UUID: [PublishedPerson]] = [:]
+            for row in try Row.fetchAll(conn, sql: """
+                SELECT ec.editionId, ec.role, c.name, c.sortName FROM edition_creator ec
+                JOIN creator c ON c.id = ec.creatorId ORDER BY ec.editionId, ec.position
+                """) {
+                responsible[row["editionId"], default: []].append(PublishedPerson(name: row["name"], sortName: row["sortName"], role: row["role"]))
+            }
+            return (presentations, collections, memberships, responsible)
+        }
         var report = PublicationReport()
         var seenHashes: Set<String> = []
         var editions: [UUID: PublishedEdition] = [:]
         var order: [UUID] = []
+        var kindPriority: [UUID: Int] = [:]
 
         for row in rows {
             let document = row.document
@@ -318,12 +362,21 @@ public struct CatalogPublisher: Sendable {
             }
             guard seenHashes.insert(hash).inserted, let key = keys[edition.id] else { continue }
 
-            let file = PublishedFile(sha256: hash, path: relative,
+            var file = PublishedFile(sha256: hash, path: relative,
                                      format: document.format.rawValue, size: document.fileSize)
+            file.label = presentations[document.id]?.label
+            file.note = presentations[document.id]?.note
+            file.preferred = presentations[document.id]?.preferred
+            let priority = presentations[document.id]?.kind == nil ? 0 : presentations[document.id]?.preferred == true ? 2 : 1
             if editions[edition.id] != nil {
+                if priority > (kindPriority[edition.id] ?? 0) {
+                    editions[edition.id]?.kind = (kinds[document.id] ?? .livre).rawValue
+                    kindPriority[edition.id] = priority
+                }
                 editions[edition.id]?.files.append(file)
                 continue
             }
+            kindPriority[edition.id] = priority
             let workYear = row.work.date
             editions[edition.id] = PublishedEdition(
                 key: key,
@@ -331,7 +384,7 @@ public struct CatalogPublisher: Sendable {
                 title: edition.title ?? row.work.title,
                 subtitle: row.work.subtitle,
                 authors: row.authors,
-                people: people[row.work.id].flatMap { $0.isEmpty ? nil : $0 },
+                people: ((people[row.work.id] ?? []) + (editionPeople[edition.id] ?? [])).isEmpty ? nil : ((people[row.work.id] ?? []) + (editionPeople[edition.id] ?? [])),
                 kind: (kinds[document.id] ?? .livre).rawValue,
                 work: row.work.id.uuidString,
                 year: workYear ?? edition.year,
@@ -343,6 +396,7 @@ public struct CatalogPublisher: Sendable {
                 discipline: row.work.discipline,
                 collections: (collectionPaths[row.work.id] ?? [])
                     .filter { !rules.excludes(relativePath: $0) }.sorted(),
+                collectionIds: memberships[row.work.id]?.sorted(),
                 status: edition.curationStatus.rawValue,
                 confidence: edition.confidence.rawValue,
                 dateAdded: document.dateAdded,
@@ -354,12 +408,21 @@ public struct CatalogPublisher: Sendable {
         let published = order.compactMap { editions[$0] }
         report.editions = published.count
         report.files = published.reduce(0) { $0 + $1.files.count }
+        var collectionIds = Set(published.flatMap { $0.collectionIds ?? [] })
+        var addedParent = true
+        while addedParent {
+            addedParent = false
+            for c in collectionRecords where collectionIds.contains(c.id) {
+                if let parent = c.parentId, collectionIds.insert(parent).inserted { addedParent = true }
+            }
+        }
         let catalogue = PublishedCatalogue(
             version: PublishedCatalogue.formatVersion,
             generatedAt: now,
             library: URL(fileURLWithPath: rootPath).lastPathComponent,
             fonds: fonds,
-            editions: published
+            editions: published,
+            collections: collectionRecords.filter { collectionIds.contains($0.id) }.sorted { $0.id < $1.id }
         )
         return (catalogue, report)
     }

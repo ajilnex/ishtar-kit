@@ -5,8 +5,9 @@ import IshtarCatalog
 /// Livre ou article : les deux rayons d'une bibliothèque de recherche
 /// (décision d'Aubin, 25/09). Les chapitres tirés d'un livre, les
 /// communications et les prépublications vont avec les articles.
-public enum DocumentKind: String, Codable, Sendable {
-    case livre, article
+public typealias DocumentKind = BibliographicKind
+
+extension BibliographicKind {
 
     static let articleMarks = [
         "jstor", "doi.org", "doi:", " doi ", "journal", "revue", "review", "proceedings", "vol.", "no.", "pp.",
@@ -30,14 +31,16 @@ public enum DocumentKind: String, Codable, Sendable {
     static func kinds(_ conn: Database) throws -> [UUID: DocumentKind] {
         var kinds: [UUID: DocumentKind] = [:]
         for row in try Row.fetchAll(conn, sql: """
-            SELECT d.id AS id, d.format AS format,
+            SELECT d.id AS id, d.format AS format, dp.kind AS curatedKind,
                    (SELECT count(*) FROM document_page p WHERE p.documentId = d.id) AS pages,
                    (SELECT group_concat(substr(content, 1, 2500), ' ') FROM (SELECT content FROM document_page p
                       WHERE p.documentId = d.id AND p.pageNumber BETWEEN 1 AND 4 ORDER BY p.pageNumber)) AS opening
-            FROM document d WHERE d.isMissing = 0
+            FROM document d LEFT JOIN document_presentation dp ON dp.documentId = d.id WHERE d.isMissing = 0
             """) {
             guard let format = DocumentFormat(rawValue: row["format"]) else { continue }
-            kinds[row["id"]] = classify(format: format, pages: row["pages"], opening: row["opening"] ?? "")
+            let explicit: String? = row["curatedKind"]
+            kinds[row["id"]] = explicit.flatMap(BibliographicKind.init(rawValue:))
+                ?? classify(format: format, pages: row["pages"], opening: row["opening"] ?? "")
         }
         return kinds
     }

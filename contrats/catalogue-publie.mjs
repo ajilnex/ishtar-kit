@@ -15,7 +15,7 @@ export const VERSION = 1
 const SHA256 = /^[0-9a-f]{64}$/
 const CLE = /^[\w.-]{1,120}$/
 const DATE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/
-const GENRES = ['livre', 'article']
+const GENRES = ['livre', 'article', 'manuscrit']
 const STATUTS = ['recognized', 'needsReview', 'duplicateCandidate', 'ignored']
 const CONFIANCES = ['high', 'probable', 'low']
 
@@ -34,6 +34,15 @@ export function erreursCatalogue(c, { limite = 50 } = {}) {
   if (!Array.isArray(c.editions)) return [...e, 'editions : tableau attendu']
 
   // Deux éditions peuvent partager un fichier (les articles d'un même numéro de revue).
+  const idsCollections = new Set()
+  if (c.collections != null) {
+    if (!Array.isArray(c.collections)) ecart('collections : tableau attendu')
+    else for (const col of c.collections) {
+      if (!col || !chaine(col.id) || !chaine(col.name)) ecart('collections : { id, name, parentId? } attendu')
+      else if (idsCollections.has(col.id)) ecart('collections : identifiant en double')
+      else idsCollections.add(col.id)
+    }
+  }
   const cles = new Set()
   const anciennes = []
   c.editions.forEach((ed, i) => {
@@ -60,6 +69,7 @@ export function erreursCatalogue(c, { limite = 50 } = {}) {
     // L'année est une chaîne : « 1951 », « -400 » (avant notre ère), « ND » de préférence.
     for (const k of ['year', 'editionYear']) if (!chaineOuAbsente(ed[k])) ecart(`${ou}.${k} : chaîne ou absent`)
     if (!Array.isArray(ed.collections) || !ed.collections.every(x => typeof x === 'string')) ecart(`${ou}.collections : tableau de chaînes attendu`)
+    if (ed.collectionIds != null && (!Array.isArray(ed.collectionIds) || !ed.collectionIds.every(id => idsCollections.has(id)))) ecart(`${ou}.collectionIds : identifiants de collections déclarées attendus`)
     if (!STATUTS.includes(ed.status)) ecart(`${ou}.status : l'un de ${STATUTS.join(', ')}`)
     if (!CONFIANCES.includes(ed.confidence)) ecart(`${ou}.confidence : l'un de ${CONFIANCES.join(', ')}`)
     if (!chaine(ed.dateAdded) || !DATE_ISO.test(ed.dateAdded)) ecart(`${ou}.dateAdded : date ISO 8601 attendue`)
@@ -69,6 +79,8 @@ export function erreursCatalogue(c, { limite = 50 } = {}) {
       if (!f || typeof f !== 'object') return ecart(`${ici} : objet attendu`)
       if (!SHA256.test(f.sha256 ?? '')) ecart(`${ici}.sha256 : empreinte SHA-256 en hexadécimal minuscule`)
       if (!chaine(f.path) || f.path.startsWith('/') || f.path.split('/').includes('..')) ecart(`${ici}.path : chemin relatif à la bibliothèque, sans « .. »`)
+      for (const k of ['label', 'note']) if (!chaineOuAbsente(f[k])) ecart(`${ici}.${k} : chaîne ou absent`)
+      if (f.preferred != null && typeof f.preferred !== 'boolean') ecart(`${ici}.preferred : booléen ou absent`)
       if (!chaine(f.format)) ecart(`${ici}.format : chaîne attendue`)
       if (!Number.isInteger(f.size) || f.size < 0) ecart(`${ici}.size : entier positif`)
     })

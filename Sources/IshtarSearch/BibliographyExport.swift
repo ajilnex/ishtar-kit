@@ -21,8 +21,9 @@ public enum BibliographyExport {
         return (words.last!, words.dropLast().joined(separator: " "))
     }
 
-    static func people(_ e: PublishedEdition) -> [PublishedPerson] {
-        e.people ?? e.authors.map { PublishedPerson(name: $0) }
+    static func people(_ e: PublishedEdition, role: String = "author") -> [PublishedPerson] {
+        (e.people ?? e.authors.map { PublishedPerson(name: $0) })
+            .filter { ($0.role ?? "author") == role }
     }
 
     /// Année lisible par un outil : « -350 » reste tel quel (biblatex l'accepte).
@@ -37,10 +38,14 @@ public enum BibliographyExport {
 
     /// Une entrée BibTeX/biblatex (pur).
     public static func bibtex(_ e: PublishedEdition) -> String {
-        let type = e.kind == "article" ? "misc" : "book"
+        let type = e.kind == "manuscrit" ? "unpublished" : e.kind == "article" ? "misc" : "book"
         var fields: [(String, String)] = []
         let names = people(e).map(name).map { $0.given.isEmpty ? $0.family : "\($0.family), \($0.given)" }
         if !names.isEmpty { fields.append(("author", names.joined(separator: " and "))) }
+        for role in ["editor", "translator"] {
+            let names = people(e, role: role).map(name).map { $0.given.isEmpty ? $0.family : "\($0.family), \($0.given)" }
+            if !names.isEmpty { fields.append((role, names.joined(separator: " and "))) }
+        }
         fields.append(("title", e.title))
         if let s = e.subtitle, !s.isEmpty { fields.append(("subtitle", s)) }
         if let y = year(e) { fields.append(("year", y)) }
@@ -63,12 +68,18 @@ public enum BibliographyExport {
     /// Un item CSL-JSON (pur).
     public static func csl(_ e: PublishedEdition) -> [String: Any] {
         var item: [String: Any] = ["id": e.key, "citation-key": e.key,
-                                   "type": e.kind == "article" ? "article" : "book",
+                                   "type": e.kind == "manuscrit" ? "manuscript" : e.kind == "article" ? "article" : "book",
                                    "title": e.subtitle.map { "\(e.title) : \($0)" } ?? e.title]
         let authors = people(e).map(name).map { n -> [String: String] in
             n.given.isEmpty ? ["literal": n.family] : ["family": n.family, "given": n.given]
         }
         if !authors.isEmpty { item["author"] = authors }
+        for role in ["editor", "translator"] {
+            let names = people(e, role: role).map(name).map { n -> [String: String] in
+                n.given.isEmpty ? ["literal": n.family] : ["family": n.family, "given": n.given]
+            }
+            if !names.isEmpty { item[role] = names }
+        }
         if let y = year(e), let v = Int(y) { item["issued"] = ["date-parts": [[v]]] }
         if e.editionYear != nil, let o = e.year, let v = Int(o) { item["original-date"] = ["date-parts": [[v]]] }
         if let p = e.publisher, !p.isEmpty { item["publisher"] = p }

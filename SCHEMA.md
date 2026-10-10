@@ -327,3 +327,20 @@ Ne sont jamais publiés : les documents introuvables ou ignorés, ceux sans
 empreinte, ceux hors de la racine, et ce qu'excluent les règles de
 l'utilisateur (`--exclude <dossier>`, `--exclude-title-prefix <préfixe>`).
 Une même empreinte n'est publiée qu'une fois.
+
+
+## v12 — Qualification et choix d’un exemplaire
+
+`document_presentation` : `documentId` (clé primaire, référence `document` avec
+suppression en cascade), `kind` (`livre`, `article`, `manuscrit`, facultatif),
+`label`, `note` (facultatifs), `preferred` (booléen, faux par défaut).
+Migration additive : aucune transformation des documents ni des annotations.
+Le genre explicite prime sur l’inférence ; il ne dépend pas de la couche texte.
+Une mise à jour partielle conserve les champs non fournis.
+
+Les collections réutilisent `collection` et `collection_item` : une appartenance
+relie une œuvre, sans ajouter de fichier ni de fiche. La publication fournit
+les identités des collections manuelles publiables et leurs appartenances ;
+les dossiers importés restent des rayonnages. Les identités sont qualifiées
+par fonds côté serveur. Cette version ne crée aucun droit d’écriture partagé.
+Les responsables éditoriaux restent dans `edition_creator`, distincts des auteurs.

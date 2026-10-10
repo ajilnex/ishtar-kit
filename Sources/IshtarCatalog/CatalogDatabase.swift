@@ -377,6 +377,15 @@ public final class CatalogDatabase: Sendable {
 
         // Les migrations suivantes (embeddings, artéfacts) arrivent avec les jalons M3–M4.
 
+        migrator.registerMigration("v12_document_presentation") { db in
+            try db.create(table: "document_presentation") { t in
+                t.column("documentId", .text).primaryKey().references("document", onDelete: .cascade)
+                t.column("kind", .text)
+                t.column("label", .text)
+                t.column("note", .text)
+                t.column("preferred", .boolean).notNull().defaults(to: false)
+            }
+        }
         return migrator
     }
 }

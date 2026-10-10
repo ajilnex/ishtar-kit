@@ -201,7 +201,7 @@ public struct CatalogStore: Sendable {
     /// statut « reconnu », confiance haute, sur tout le groupe. La fiche
     /// conservée (titre, auteurs, édition) n'est jamais modifiée — les
     /// corrections humaines priment. Aucun fichier touché.
-    public func merge(duplicates: [UUID], into keptDocumentId: UUID) async throws {
+    public func merge(duplicates: [UUID], into keptDocumentId: UUID, humanConfirmed: Bool = true) async throws {
         try await db.pool.write { conn in
             guard let kept = try Document.fetchOne(conn, key: keptDocumentId) else {
                 throw DatabaseError(message: "Document conservé introuvable.")
@@ -226,7 +226,7 @@ public struct CatalogStore: Sendable {
                 guard var document = try Document.fetchOne(conn, key: id) else { continue }
                 document.editionId = keptEditionId
                 document.curationStatus = .recognized
-                document.confidence = .high
+                if humanConfirmed || document.confidence != .high { document.confidence = humanConfirmed ? .high : .probable }
                 try document.update(conn)
             }
 
@@ -234,17 +234,17 @@ public struct CatalogStore: Sendable {
             // sans toucher titre/auteurs/année.
             var keptDocument = kept
             keptDocument.curationStatus = .recognized
-            keptDocument.confidence = .high
+            if humanConfirmed || keptDocument.confidence != .high { keptDocument.confidence = humanConfirmed ? .high : .probable }
             try keptDocument.update(conn)
 
             if var edition = try Edition.fetchOne(conn, key: keptEditionId) {
                 edition.curationStatus = .recognized
-                edition.confidence = .high
+                if humanConfirmed || edition.confidence != .high { edition.confidence = humanConfirmed ? .high : .probable }
                 try edition.update(conn)
 
                 if var work = try Work.fetchOne(conn, key: edition.workId) {
                     work.curationStatus = .recognized
-                    work.confidence = .high
+                    if humanConfirmed || work.confidence != .high { work.confidence = humanConfirmed ? .high : .probable }
                     try work.update(conn)
                 }
             }

@@ -25,7 +25,7 @@ struct IshtarCLI: AsyncParsableCommand {
             Embed.self, Find.self, ImportBibtex.self, ImportZotero.self,
             Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self,
             Traductions.self, Reunir.self, Ranger.self, Verifier.self, Corriger.self, Attester.self, Cles.self, Auteurs.self, Titres.self,
-            Prenoms.self, Doublons.self, Exporter.self, Annotations.self, AnnotationsOrigine.self, Fonds.self,
+            Prenoms.self, Doublons.self, Exporter.self, Annotations.self, AnnotationsOrigine.self, Fonds.self, CollectionCommand.self, Rattacher.self,
         ]
         #if canImport(Vision)
         liste.insert(OCRCompare.self, at: 6)
@@ -187,12 +187,24 @@ struct Extract: AsyncParsableCommand {
     @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
     var db: URL
 
+    @Option(name: .long, help: "N'extraire que cet exemplaire (UUID ; répétable). Lecture de la couche texte existante, sans OCR.")
+    var document: [String] = []
+
     func run() async throws {
         let database = try CatalogDatabase(at: db)
 
         print("Extraction du texte : \(db.path)")
         print(String(repeating: "─", count: 60))
 
+        if !document.isEmpty {
+            let ids = try Set(document).map { value -> UUID in
+                guard let id = UUID(uuidString: value) else { throw ValidationError("UUID invalide : \(value)") }
+                return id
+            }
+            for id in ids { try await ExtractionPipeline().extract(documentId: id, into: database) }
+            print("Documents extraits  \(Set(document).count)")
+            return
+        }
         let processed = try await ExtractionPipeline().extractAllPending(into: database) { done, total in
             // Progression réécrite sur la même ligne (stderr), sobre.
             let pct = total == 0 ? 100 : done * 100 / total
@@ -829,6 +841,9 @@ struct Ranger: AsyncParsableCommand {
     @Option(name: .long, help: "Ne renommer que les N premiers (essai).")
     var limite: Int?
 
+    @Option(name: .long, help: "Ne renommer que ce document (UUID, répétable).")
+    var document: [String] = []
+
     @Flag(name: .long, help: "Renomme (sinon : seulement montrer).")
     var appliquer = false
 
@@ -852,7 +867,12 @@ struct Ranger: AsyncParsableCommand {
             print("\(n) renommages défaits.")
             return
         }
+        let ids = try Set(document.map { raw -> UUID in
+            guard let id = UUID(uuidString: raw) else { throw ValidationError("UUID de document invalide : \(raw)") }
+            return id
+        })
         var plan = try await store.arrangement(root: racine, excludedFolders: Set(exclure))
+        if !ids.isEmpty { plan = plan.filter { ids.contains($0.documentId) } }
         // Gardes : un nom de fichier qui désigne un autre auteur que la fiche
         // est un conflit non résolu (le nom de fichier est un témoin : on ne
         // l'efface pas) ; les fiches « TRIER » attendent Aubin.
@@ -965,6 +985,12 @@ struct Corriger: AsyncParsableCommand {
         let preuve: String?
         /// Le sous-titre, à part du titre (RDA : complément du titre).
         let sousTitre: String?
+        let genre: BibliographicKind?
+        let libelle: String?
+        let reserve: String?
+        let prefere: Bool?
+        let responsablesEdition: [String]?
+        let traducteurs: [String]?
         /// Qui a lu les pages (« Codex + Claude ») ; défaut : `--par`.
         let lecteurs: String?
         /// L'empreinte du fichier dont les pages ont été lues.
@@ -1030,6 +1056,24 @@ struct Corriger: AsyncParsableCommand {
                 }
                 continue
             }
+            // Une qualification de fichier ne réécrit pas sa bibliographie et
+            // ne retire pas une vérification déjà acquise.
+            if c.titre == nil && c.auteurs == nil &&
+               (c.genre != nil || c.libelle != nil || c.reserve != nil || c.prefere != nil) {
+                guard c.annee == nil, c.edition == nil, c.editeur == nil,
+                      c.isbn == nil, c.langue == nil, c.sousTitre == nil,
+                      c.responsablesEdition == nil, c.traducteurs == nil,
+                      c.detacher != true, !surPieces else {
+                    print("   titre et auteurs requis pour une correction bibliographique"); continue
+                }
+                print("\(c.fichier)\n   → qualification du fichier")
+                if appliquer {
+                    try await store.updatePresentation(documentId: target.documentId,
+                        kind: c.genre, label: c.libelle, note: c.reserve, preferred: c.prefere)
+                    done += 1
+                }
+                continue
+            }
             guard let titre = c.titre, let auteurs = c.auteurs else { print("   titre ou auteurs manquants"); continue }
             print("\(c.fichier)\n   → \(auteurs.joined(separator: " ; ")) — \(titre) (\(c.annee ?? "s.d."))")
             if surPieces, let refus = try await store.proofRefusal(documentId: target.documentId, proof: c.preuve, sha256: c.sha256) {
@@ -1053,6 +1097,14 @@ struct Corriger: AsyncParsableCommand {
                 if !humain {
                     try await store.lowerToProbable(workId: target.workId, editionId: target.editionId, documentId: target.documentId)
                 }
+            }
+            if c.genre != nil || c.libelle != nil || c.reserve != nil || c.prefere != nil {
+                try await store.updatePresentation(documentId: target.documentId,
+                    kind: c.genre, label: c.libelle, note: c.reserve, preferred: c.prefere)
+            }
+            if let id = target.editionId {
+                if let names = c.responsablesEdition { try await store.setEditionCreators(names, role: .editor, editionId: id) }
+                if let names = c.traducteurs { try await store.setEditionCreators(names, role: .translator, editionId: id) }
             }
             done += 1
         }
