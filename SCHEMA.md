@@ -223,6 +223,42 @@ Le code s'y conforme : `setKey` refuse (`CiteKeyError.retired`), l'attribution
 et la séparation des fonds évitent les pierres, `replace` n'écrase plus une
 pierre. Toute migration reste additive.
 
+## Migration v11 — annotations du lecteur en ligne (T-037, 10/10)
+
+Additive : rien n'est réécrit ni retiré.
+
+- **annotation** gagne quatre colonnes, toutes facultatives :
+  - `kind` : la sorte. Nul = surlignement ; `note` (un trait et une pastille, sans fond),
+    `drawing` (un dessin ancré sur un groupe de mots), `stroke` (un trait libre sur la page
+    d'un PDF, sans citation).
+  - `author` : l'adresse de qui a annoté. Nul = le propriétaire de la bibliothèque.
+  - `origin` : d'où vient l'annotation. `pdf` (lue dans le fichier PDF, qui la porte : tout lecteur
+    de PDF la peint déjà), `app` (faite dans Ishtar ; `AnnotationStore.add` la pose quand rien d'autre
+    n'est dit), `reader` (faite dans le lecteur en ligne). Nul = inconnue (d'avant la v11).
+  - `geometry` : JSON de `AnnotationGeometry`, voir plus bas.
+- **annotation_drawing** (`annotationId` → `annotation`, `ON DELETE CASCADE`) : `strokes` (les traits,
+  JSON), `svg` (calculé par le serveur du lecteur, jamais reçu du client), `width`, `height`.
+  `annotationId` a le type déclaré de `annotation.id` : GRDB y range un BLOB de 16 octets, jamais du
+  texte (ne pas le comparer à du texte en SQL brut).
+- **annotation_import** : les opérations déjà importées depuis la file du lecteur (`opId`, `fonds`,
+  `seq`, `annotationId`, `result`, `detail`, `appliedAt`) : ce qui rend l'import idempotent.
+
+**La géométrie** (`AnnotationGeometry`) n'est jamais l'ancre : le texte fait foi. Elle accélère le
+lecteur en ligne, et ne vaut que pour le fichier où elle a été mesurée. `{ "sha256": <empreinte du
+fichier>, "pages": [{ "page": N, "rects": [[x, y, l, h], …] }] }` : les rectangles sont ceux de la
+**cropBox non tournée** de la page (l'espace de PDFKit, que la rotation `/Rotate` laisse intact),
+normalisés de 0 à 1, origine en haut à gauche, quatre décimales ; au plus 4 pages et 64 rectangles par
+page ; les morceaux d'une même ligne sont réunis. Un surlignement de PDF reçoit sa géométrie des
+`quadrilateralPoints` du fichier, à condition que les rectangles tiennent dans le cadre de l'annotation ;
+sinon il n'en a pas, et le lecteur retombe sur le texte.
+
+`ishtar annotations-origine --db <catalogue> --racine <bibliothèque> [--appliquer]` relit les PDF par
+PDFKit, reconnaît chaque surlignement du catalogue à la même clé que l'importateur (page + citation
+repliée), et pose `origin = 'pdf'` et `geometry`. Sans `--appliquer`, il compte. Idempotent. Il ne touche
+ni les fichiers ni `dateModified` (qui sert à repérer les conflits), ni les annotations d'origine `app`
+ou `reader`. `ishtar annotations --appliquer` et l'import de l'application posent désormais, eux aussi,
+origine et géométrie.
+
 ## Catalogue publié — format d'échange (lot F3)
 
 `ishtar publish` écrit, dans un dossier choisi par l'utilisateur, un
@@ -276,11 +312,16 @@ instantané lisible sans Ishtar :
 - `corpus/` (avec `--corpus`, la face cachée pour les modèles, 25/09) :
   `<sha256>.pages.deflate` (texte extrait, DEFLATE brut, pages séparées par
   U+000C) et `annotations.json` — `{ annotations: [{ id, sha256, page?, cfi?,
-  citation, avant?, apres?, note?, couleur?, date }], encres: [{ de, vers,
+  citation, avant?, apres?, note?, couleur?, date, modifie?, sorte?, auteur?, origine?, geometrie?,
+  dessin?, svg? }], encres: [{ de, vers,
   nature?, note?, couleur? }] }`, triés, seulement pour les documents publiés
-  (une encre dont un bout n'est pas publié ne sort pas). Jamais servi par
-  Rayons ; le Bibliothécaire le réserve au droit Portier
-  `bibliothecaire:annotations`.
+  (une encre dont un bout n'est pas publié ne sort pas). Depuis la v11, des ajouts compatibles de la
+  v1 : `modifie` (la dernière modification, ISO 8601 au millième), `sorte` (`note`, `dessin`, `trait` ;
+  absente = surlignement), `auteur` (absent = le propriétaire), `origine` (`pdf`, `app`, `lecteur`),
+  `geometrie` (voir la v11 ; omise si elle sort de ses bornes), et pour un dessin `dessin`
+  (`{ largeur, hauteur, traits }`) et `svg`. Une sorte que le moteur ne connaît pas ne sort pas.
+  Rayons lit ce fichier pour le lecteur en ligne (aux contributeurs seulement) ; le Bibliothécaire le
+  réserve au droit Portier `bibliothecaire:annotations`.
 
 Ne sont jamais publiés : les documents introuvables ou ignorés, ceux sans
 empreinte, ceux hors de la racine, et ce qu'excluent les règles de

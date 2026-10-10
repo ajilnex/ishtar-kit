@@ -11,10 +11,16 @@ public struct AnnotationStore: Sendable {
         self.db = db
     }
 
+    /// Ajoute une annotation. Sans origine déclarée, elle est de l'application
+    /// (`origin = "app"`) : ce qui vient d'un PDF (`pdf`) ou du lecteur en ligne
+    /// (`reader`) la porte déjà.
     @discardableResult
     public func add(_ annotation: Annotation) async throws -> Annotation {
+        var annotation = annotation
+        if annotation.origin == nil { annotation.origin = "app" }
+        let ajoutee = annotation
         try await db.pool.write { conn in
-            try annotation.insert(conn)
+            try ajoutee.insert(conn)
         }
         return annotation
     }

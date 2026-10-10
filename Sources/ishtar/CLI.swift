@@ -25,7 +25,7 @@ struct IshtarCLI: AsyncParsableCommand {
             Embed.self, Find.self, ImportBibtex.self, ImportZotero.self,
             Keys.self, Publish.self, Typographie.self, Regrouper.self, Autorites.self, Reidentifier.self, Langues.self,
             Traductions.self, Reunir.self, Ranger.self, Verifier.self, Corriger.self, Attester.self, Cles.self, Auteurs.self, Titres.self,
-            Prenoms.self, Doublons.self, Exporter.self, Annotations.self, Fonds.self,
+            Prenoms.self, Doublons.self, Exporter.self, Annotations.self, AnnotationsOrigine.self, Fonds.self,
         ]
         #if canImport(Vision)
         liste.insert(OCRCompare.self, at: 6)
@@ -1380,6 +1380,53 @@ struct Annotations: AsyncParsableCommand {
             print(line)
         }
         print("\(found) annotation(s) dans \(documents) PDF\(appliquer ? " ; \(added) importée(s)" : " (simulation : --appliquer pour importer)").")
+    }
+}
+
+struct AnnotationsOrigine: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "annotations-origine",
+        abstract: "Reconnaît les surlignements venus des PDF (ils sont dans le fichier) : leur pose l'origine « pdf » et leur géométrie, que le lecteur en ligne emploie pour les retrouver. Sans --appliquer, compte seulement. Idempotent ; les fichiers ne sont jamais modifiés, ni la date de modification des annotations."
+    )
+
+    @Option(name: .long, help: "Chemin du fichier catalogue SQLite.", transform: URL.init(fileURLWithPath:))
+    var db: URL
+
+    @Option(name: .long, help: "Racine de la bibliothèque (seuls ses fichiers sont lus).")
+    var racine: String
+
+    @Option(name: .long, help: "Dossier laissé tel quel (répétable).")
+    var exclure: [String] = ["_NON_BIBLIO"]
+
+    @Flag(name: .long, help: "Écrit (sinon : seulement compter).")
+    var appliquer = false
+
+    func run() async throws {
+        let database = try CatalogDatabase(at: db)
+        let root = URL(fileURLWithPath: racine).standardizedFileURL.path
+        let rows = try await database.pool.read { conn in
+            try Row.fetchAll(conn, sql: """
+                SELECT d.id AS id, d.filePath AS path, d.contentHash AS sha FROM document d
+                WHERE d.isMissing = 0 AND d.format = 'pdf' AND d.contentHash IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM annotation a WHERE a.documentId = d.id)
+                ORDER BY d.filePath
+                """)
+        }
+        let outil = AnnotationOrigine()
+        var total = AnnotationOrigine.Bilan()
+        var documents = 0
+        for r in rows {
+            let path: String = r["path"]
+            guard path.hasPrefix(root + "/") else { continue }
+            let rel = String(path.dropFirst(root.count + 1))
+            if rel.split(separator: "/").dropLast().contains(where: { exclure.contains(String($0)) }) { continue }
+            let bilan = try await outil.reconnaitre(documentId: r["id"], sha256: r["sha"], pdfAt: path,
+                                                    in: database, appliquer: appliquer)
+            documents += 1
+            total = total + bilan
+            print("\(bilan.reconnues)/\(bilan.annotations)\t\(bilan.avecGeometrie) avec géométrie\t\(rel)")
+        }
+        print("\(total.reconnues) reconnue(s) sur \(total.annotations) annotation(s) de \(documents) PDF ; \(total.avecGeometrie) avec géométrie ; \(total.modifiees) \(appliquer ? "écrite(s)" : "à écrire (simulation : --appliquer pour écrire)").")
     }
 }
 

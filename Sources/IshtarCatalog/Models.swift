@@ -332,6 +332,17 @@ public struct Annotation: Identifiable, Codable, Hashable, Sendable, FetchableRe
     public var projectId: UUID?
     public var dateCreated: Date
     public var dateModified: Date
+    /// La sorte (v11) : nil = surlignement ; `note`, `drawing`, `stroke`.
+    public var kind: String?
+    /// L'adresse de qui a annoté (v11) ; nil = le propriétaire de la bibliothèque.
+    public var author: String?
+    /// D'où vient l'annotation (v11) : `pdf` (lue dans le fichier, déjà peinte
+    /// par tout lecteur de PDF), `app` (faite dans Ishtar), `reader` (faite dans le
+    /// lecteur en ligne) ; nil = inconnue.
+    public var origin: String?
+    /// La géométrie (v11), JSON : voir `AnnotationGeometry`. Un accélérateur
+    /// pour le lecteur en ligne, jamais l'ancre (le texte fait foi).
+    public var geometry: String?
 
     public init(
         id: UUID = UUID(),
@@ -345,7 +356,11 @@ public struct Annotation: Identifiable, Codable, Hashable, Sendable, FetchableRe
         color: String? = nil,
         projectId: UUID? = nil,
         dateCreated: Date = Date(),
-        dateModified: Date = Date()
+        dateModified: Date = Date(),
+        kind: String? = nil,
+        author: String? = nil,
+        origin: String? = nil,
+        geometry: String? = nil
     ) {
         self.id = id
         self.documentId = documentId
@@ -359,6 +374,10 @@ public struct Annotation: Identifiable, Codable, Hashable, Sendable, FetchableRe
         self.projectId = projectId
         self.dateCreated = dateCreated
         self.dateModified = dateModified
+        self.kind = kind
+        self.author = author
+        self.origin = origin
+        self.geometry = geometry
     }
 }
 
