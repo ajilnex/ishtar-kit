@@ -171,7 +171,7 @@ struct AnnotationLecteurTests {
         try await db.pool.write { conn in
             try a.insert(conn)
             try conn.execute(sql: "INSERT INTO annotation_drawing (annotationId, strokes, svg, width, height) VALUES (?, ?, ?, 1000, 1414)",
-                             arguments: [a.id, #"[{"c":"encre","e":2.5,"p":[[1,2,0.5,0]]}]"#, #"<svg viewBox="0 0 1000 1414"></svg>"#])
+                             arguments: [a.id, #"[{"couleur":"noir","epaisseur":0.01,"points":[[0.1,0.2,0.5]]}]"#, #"<svg viewBox="0 0 1000 1414"></svg>"#])
         }
         let toutes = try await publiees(db)
         let n = try #require(toutes.first)
@@ -179,7 +179,11 @@ struct AnnotationLecteurTests {
         let dessin = try #require(n["dessin"] as? [String: Any])
         #expect(dessin["largeur"] as? Double == 1000 && dessin["hauteur"] as? Double == 1414)
         #expect((dessin["traits"] as? [[String: Any]])?.count == 1)
-        #expect(n["svg"] as? String == #"<svg viewBox="0 0 1000 1414"></svg>"#)
+        let expected = AnnotationDrawing(largeur: 1000, hauteur: 1414, traits: [.init(couleur: "noir", epaisseur: 0.01, points: [[0.1, 0.2, 0.5]])])
+        #expect(n["svg"] as? String == expected.svg)
+        // Une ancienne charge hors contrat ne sort pas, même avec un SVG stocké.
+        try await db.pool.write { try $0.execute(sql: "UPDATE annotation_drawing SET strokes = '[]' WHERE annotationId = ?", arguments: [a.id]) }
+        #expect(try await publiees(db).isEmpty)
         // Retirer l'annotation emporte son dessin.
         try await AnnotationStore(db: db).remove(id: a.id)
         let restes = try await db.pool.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM annotation_drawing") }

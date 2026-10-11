@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// File Rayons, traitée dans une transaction (T-037, notes et surlignements).
+/// File Rayons, traitée dans une transaction (T-037, notes, surlignements et dessins).
 public struct AnnotationImport: Sendable {
     public struct Snapshot: Codable, Equatable, Sendable {
         public var id: String
@@ -19,7 +19,7 @@ public struct AnnotationImport: Sendable {
         public var origine: String?
         public var date: String
         public var modifie: String
-        // Présence interdite au lot 2, même si le serveur fournit un objet vide.
+        // Vecteurs uniquement ; aucun SVG fourni par le client n’est accepté.
         public var dessin: JSONValue?
         public var svg: String?
     }
@@ -42,7 +42,7 @@ public struct AnnotationImport: Sendable {
         public var ops: [Operation]
     }
 
-    /// Sert uniquement à conserver et refuser les dessins hors périmètre.
+    /// Conserve le JSON reçu pour les reçus et la comparaison des replays.
     public indirect enum JSONValue: Codable, Equatable, Sendable {
         case null, bool(Bool), number(Double), string(String), array([JSONValue]), object([String: JSONValue])
         public init(from decoder: Decoder) throws {
@@ -133,6 +133,7 @@ public struct AnnotationImport: Sendable {
             // Un rejet reste rejeté : « déjà » serait acquitté comme importé par Rayons.
             return row["result"] as String == "rejete" ? result("rejete", trace.motif) : result("deja")
         }
+        guard (try? JSONEncoder().encode(op)) != nil else { return result("rejete", "JSON invalide") }
         let outcome = try apply(op, db: db)
         let detail = String(decoding: try JSONEncoder().encode(Trace(operation: op, motif: outcome.motif)), as: UTF8.self)
         try db.execute(sql: "INSERT INTO annotation_import (opId, fonds, seq, annotationId, result, detail, appliedAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -152,9 +153,13 @@ public struct AnnotationImport: Sendable {
               s.auteur == nil || s.auteur == op.auteur,
               ["poser", "modifier", "retirer"].contains(op.op)
         else { return result("rejete", "opération invalide") }
-        guard s.sorte == nil || ["note", "surlignement"].contains(s.sorte), s.dessin == nil, s.svg == nil
+        let kind = ["note": "note", "dessin": "drawing", "trait": "stroke"][s.sorte ?? ""]
+        let isDrawing = kind == "drawing" || kind == "stroke"
+        let drawing = s.dessin.flatMap { AnnotationDrawing(validated: $0) }
+        guard s.sorte == nil || ["note", "surlignement", "dessin", "trait"].contains(s.sorte), s.svg == nil,
+              isDrawing ? drawing?.isValid == true : s.dessin == nil
         else { return result("rejete", "sorte non prise en charge") }
-        guard !s.citation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, s.citation.count <= 2_000,
+        guard (kind == "stroke" || !s.citation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty), s.citation.count <= 2_000,
               (s.avant?.count ?? 0) <= 48, (s.apres?.count ?? 0) <= 48, (s.note?.count ?? 0) <= 20_000,
               s.page == nil || s.page! >= 1, (s.cfi?.count ?? 0) <= 2_000,
               s.origine == nil || ["pdf", "app", "lecteur"].contains(s.origine!),
@@ -166,6 +171,12 @@ public struct AnnotationImport: Sendable {
         guard !documents.isEmpty else { return result("rejete", "document absent") }
         guard documents.count == 1 else { return result("rejete", "document ambigu") }
         let document = documents[0]
+        if isDrawing {
+            guard document.format == .pdf || (kind == "drawing" && document.format == .epub),
+                  s.page == nil || (1...100_000).contains(s.page!),
+                  kind != "stroke" || (s.page != nil && s.cfi == nil)
+            else { return result("rejete", "format ou page invalide") }
+        }
         // Les UUID sont liés via GRDB (BLOB), jamais via uuidString en SQL.
         let existing = try Annotation.fetchOne(db, key: id)
         if let existing, existing.documentId != document.id { return result("rejete", "id détourné") }
@@ -180,14 +191,18 @@ public struct AnnotationImport: Sendable {
         else { return result("rejete", "couleur non prise en charge") }
         var annotation = Annotation(id: id, documentId: document.id, pageNumber: s.page, cfi: s.cfi,
                                     quote: s.citation, prefix: s.avant, suffix: s.apres, note: s.note, color: s.couleur,
-                                    dateCreated: created, dateModified: time, kind: s.sorte == "note" ? "note" : nil,
+                                    dateCreated: created, dateModified: time, kind: kind,
                                     author: op.auteur, origin: origin(s.origine), geometry: s.geometrie?.json)
         switch op.op {
         case "poser":
             guard op.base == nil else { return result("rejete", "base invalide") }
             guard s.origine == nil || s.origine == "lecteur" else { return result("rejete", "origine invalide") }
             if let existing {
-                return same(existing, annotation) ? result("deja") : result("rejete", "id existant")
+                let stored = try Row.fetchOne(db, sql: "SELECT strokes, width, height FROM annotation_drawing WHERE annotationId = ?", arguments: [id])
+                let sameDrawing = drawing.map { d in
+                    stored?["strokes"] as String? == d.strokesJSON && stored?["width"] as Double? == d.largeur && stored?["height"] as Double? == d.hauteur
+                } ?? (stored == nil)
+                return same(existing, annotation) && sameDrawing ? result("deja") : result("rejete", "id existant")
             }
             // Un retrait importé garde l'UUID réservé, même après disparition de la ligne.
             let traces = try String.fetchAll(db, sql: "SELECT detail FROM annotation_import WHERE annotationId = ? AND result = 'applique'", arguments: [id])
@@ -201,7 +216,7 @@ public struct AnnotationImport: Sendable {
             guard let base = op.base.flatMap(date), milliseconds(existing.dateModified) == milliseconds(base)
             else { return result("rejete", "conflit") }
             guard time > base else { return result("rejete", "date non croissante") }
-            guard existing.kind == nil || existing.kind == "note" else { return result("rejete", "sorte non prise en charge") }
+            guard existing.kind == kind else { return result("rejete", "sorte immuable") }
             if op.op == "retirer" {
                 guard existing.origin != "pdf" else { return result("rejete", "retrait PDF non pris en charge") }
                 try existing.delete(db)
@@ -214,6 +229,10 @@ public struct AnnotationImport: Sendable {
                 try annotation.update(db)
             }
         default: return result("rejete", "opération invalide")
+        }
+        if op.op != "retirer", let drawing {
+            try db.execute(sql: "INSERT INTO annotation_drawing (annotationId, strokes, svg, width, height) VALUES (?, ?, ?, ?, ?) ON CONFLICT(annotationId) DO UPDATE SET strokes = excluded.strokes, svg = excluded.svg, width = excluded.width, height = excluded.height",
+                           arguments: [id, drawing.strokesJSON!, drawing.svg!, drawing.largeur, drawing.hauteur])
         }
         return result("applique")
     }

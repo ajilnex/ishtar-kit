@@ -235,10 +235,19 @@ public struct CatalogPublisher: Sendable {
                    let objet = try? JSONSerialization.jsonObject(with: Data(valide.json.utf8)) {
                     n["geometrie"] = objet
                 }
-                if let strokes: String = r["strokes"], let svg: String = r["svg"],
-                   let traits = try? JSONSerialization.jsonObject(with: Data(strokes.utf8)) {
-                    let largeur: Double = r["width"] ?? 0, hauteur: Double = r["height"] ?? 0
-                    n["dessin"] = ["largeur": largeur, "hauteur": hauteur, "traits": traits] as [String: Any]
+                if sorte == "dessin" || sorte == "trait" {
+                    guard let strokes: String = r["strokes"],
+                          let traits = try? JSONDecoder().decode([AnnotationDrawing.Stroke].self, from: Data(strokes.utf8)),
+                          let width: Double = r["width"], let height: Double = r["height"] else {
+                        kept.remove(id); continue
+                    }
+                    let drawing = AnnotationDrawing(largeur: width, hauteur: height, traits: traits)
+                    guard drawing.isValid, let svg = drawing.svg,
+                          let data = try? JSONEncoder().encode(drawing),
+                          let object = try? JSONSerialization.jsonObject(with: data) else {
+                        kept.remove(id); continue
+                    }
+                    n["dessin"] = object
                     n["svg"] = svg
                 }
                 notes.append(n)
