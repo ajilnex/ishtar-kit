@@ -41,6 +41,23 @@ public struct AnnotationDrawing: Codable, Equatable, Sendable {
                 && t.points.allSatisfy { $0.count == 3 && $0.allSatisfy { $0.isFinite && (0...1).contains($0) } }
         }
     }
+    /// Les ancres publiables suivent le même contrat que la création côté Portier.
+    public static func hasValidAnchor(kind: String, format: DocumentFormat, quote: String,
+                                      page: Int?, cfi: String?, hasGeometry: Bool) -> Bool {
+        guard ["drawing", "stroke"].contains(kind), quote.count <= 2_000,
+              kind == "stroke" || !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              page == nil || (1...100_000).contains(page!) else { return false }
+        switch format {
+        case .pdf:
+            return cfi == nil && (kind != "stroke" || page != nil)
+        case .epub:
+            guard kind == "drawing", page == nil, !hasGeometry else { return false }
+            guard let cfi else { return true }
+            return cfi.count <= 200 && cfi.range(of: #"^epubcfi\([\w!/:@~.,\[\]^=;-]{1,190}\)$"#, options: .regularExpression) != nil
+        default:
+            return false
+        }
+    }
     public var strokesJSON: String? {
         guard isValid else { return nil }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

@@ -393,7 +393,7 @@ struct AnnotationImportTests {
         #expect(try await run([bad], db: db).rejetees == 1)
         try await db.pool.write { try $0.execute(sql: "UPDATE document SET format = 'epub' WHERE id = ?", arguments: [doc]) }
         #expect(try await run([drawingOperation(kind: "trait")], db: db).rejetees == 1)
-        let pose = drawingOperation(kind: "dessin")
+        var pose = drawingOperation(kind: "dessin"); pose.instantane.page = nil
         #expect(try await run([pose], db: db).appliquees == 1)
         var change = drawingOperation(kind: "dessin", seq: 2, id: UUID(uuidString: pose.id)!, op: "modifier", base: initial, t: later)
         change.instantane.sorte = "note"; change.instantane.dessin = nil
@@ -480,6 +480,82 @@ struct AnnotationImportTests {
         #expect(svg.contains("M 0.0 0.0 L 800.0 400.0"))
         let points = try #require(drawing.strokesJSON)
         #expect(points.contains("[0,0,0]") && points.contains("[1,1,1]"))
+    }
+
+    @Test("Édition : citation, page, CFI et contexte immuables, aucune mutation des vecteurs")
+    func ancresImmuables() async throws {
+        for kind in ["note", "dessin", "trait"] {
+            let (db, _) = try await fixture()
+            let pose = kind == "note" ? operation() : drawingOperation(kind: kind)
+            _ = try await run([pose], db: db)
+            let before = try await annotations(db)
+            for field in ["citation", "page", "cfi", "avant", "apres"] {
+                var edit = pose
+                edit.opId = UUID().uuidString; edit.seq = 2; edit.op = "modifier"; edit.base = initial; edit.t = later; edit.instantane.modifie = later
+                switch field {
+                case "citation": edit.instantane.citation = "Citation détournée"
+                case "page": edit.instantane.page = 3
+                case "cfi": edit.instantane.cfi = "epubcfi(/6/2)"
+                case "avant": edit.instantane.avant = "Contexte détourné"
+                default: edit.instantane.apres = "Contexte détourné"
+                }
+                let report = try await run([edit], db: db)
+                #expect(report.rejetees == 1)
+                if field != "cfi" || kind == "note" { #expect(report.resultats[0].motif == "ancre immuable") }
+                #expect(try await annotations(db) == before)
+            }
+        }
+    }
+
+    @Test("Ancres dessin : séparation PDF/EPUB, CFI canonique et contrôles à la publication")
+    func formatsEtPublication() async throws {
+        for format in [DocumentFormat.pdf, .epub] {
+            let (db, doc) = try await fixture()
+            try await db.pool.write { try $0.execute(sql: "UPDATE document SET format = ? WHERE id = ?", arguments: [format.rawValue, doc]) }
+            var valid = drawingOperation(kind: "dessin")
+            if format == .epub { valid.instantane.page = nil; valid.instantane.cfi = "epubcfi(/6/2)" }
+            #expect(try await run([valid], db: db).appliquees == 1)
+            for malformed in ["page", "cfi", "geometry"] {
+                var invalid = drawingOperation(kind: "dessin")
+                invalid.instantane.page = nil
+                if malformed == "page" { invalid.instantane.page = 2 }
+                if malformed == "cfi" { invalid.instantane.cfi = "arbitraire" }
+                if malformed == "geometry" { invalid.instantane.geometrie = .init(sha256: sha, pages: [.init(page: 2, rects: [[0, 0, 1, 1]])]) }
+                if format == .pdf && malformed != "cfi" { continue }
+                #expect(try await run([invalid], db: db).rejetees == 1)
+            }
+            // Contourne volontairement l'import : la publication doit défendre son contrat.
+            let invalid = Annotation(documentId: doc, pageNumber: format == .epub ? 2 : nil,
+                                     cfi: format == .pdf ? "epubcfi(/6/2)" : nil,
+                                     quote: "Citation inventée", kind: "drawing")
+            let stroke = Annotation(documentId: doc, pageNumber: format == .epub ? 2 : nil, quote: "", kind: "stroke")
+            let noQuote = Annotation(documentId: doc, pageNumber: format == .pdf ? 2 : nil, quote: " ", kind: "drawing")
+            let validId = UUID(uuidString: valid.id)!
+            try await db.pool.write { conn in
+                for annotation in [invalid, stroke, noQuote] {
+                    try annotation.insert(conn)
+                    try conn.execute(sql: "INSERT INTO annotation_drawing SELECT ?, strokes, svg, width, height FROM annotation_drawing WHERE annotationId = ?", arguments: [annotation.id, validId])
+                }
+            }
+            let data = try await CatalogPublisher.annotationsJSON(db: db, hashes: [sha])
+            let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let notes = try #require(object["annotations"] as? [[String: Any]])
+            #expect(notes.count == 1 && notes.first?["id"] as? String == valid.id)
+        }
+    }
+
+    @Test("EPUB : un autre CFI valide ne déplace pas le dessin à l'édition")
+    func cfiImmuable() async throws {
+        let (db, doc) = try await fixture()
+        try await db.pool.write { try $0.execute(sql: "UPDATE document SET format = 'epub' WHERE id = ?", arguments: [doc]) }
+        var pose = drawingOperation(kind: "dessin")
+        pose.instantane.page = nil; pose.instantane.cfi = "epubcfi(/6/2)"
+        #expect(try await run([pose], db: db).appliquees == 1)
+        var edit = pose; edit.opId = UUID().uuidString; edit.seq = 2; edit.op = "modifier"
+        edit.base = initial; edit.t = later; edit.instantane.modifie = later
+        edit.instantane.cfi = "epubcfi(/6/4)"
+        #expect(try await run([edit], db: db).resultats[0].motif == "ancre immuable")
+        #expect(try await annotations(db).first?.cfi == "epubcfi(/6/2)")
     }
 
 }

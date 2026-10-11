@@ -172,10 +172,9 @@ public struct AnnotationImport: Sendable {
         guard documents.count == 1 else { return result("rejete", "document ambigu") }
         let document = documents[0]
         if isDrawing {
-            guard document.format == .pdf || (kind == "drawing" && document.format == .epub),
-                  s.page == nil || (1...100_000).contains(s.page!),
-                  kind != "stroke" || (s.page != nil && s.cfi == nil)
-            else { return result("rejete", "format ou page invalide") }
+            guard AnnotationDrawing.hasValidAnchor(kind: kind!, format: document.format, quote: s.citation,
+                                                   page: s.page, cfi: s.cfi, hasGeometry: s.geometrie != nil)
+            else { return result("rejete", "format ou ancre invalide") }
         }
         // Les UUID sont liés via GRDB (BLOB), jamais via uuidString en SQL.
         let existing = try Annotation.fetchOne(db, key: id)
@@ -222,6 +221,10 @@ public struct AnnotationImport: Sendable {
                 try existing.delete(db)
             }
             else {
+                guard annotation.quote == existing.quote, annotation.pageNumber == existing.pageNumber,
+                      annotation.cfi == existing.cfi, annotation.prefix == existing.prefix,
+                      annotation.suffix == existing.suffix
+                else { return result("rejete", "ancre immuable") }
                 // Le Projet et la création appartiennent au catalogue, pas au lecteur.
                 annotation.projectId = existing.projectId
                 annotation.origin = existing.origin

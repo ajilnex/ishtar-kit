@@ -193,7 +193,7 @@ public struct CatalogPublisher: Sendable {
     static func annotationsJSON(db: CatalogDatabase, hashes: Set<String>) async throws -> Data {
         try await db.pool.read { conn in
             let rows = try Row.fetchAll(conn, sql: """
-                SELECT a.id AS id, d.contentHash AS sha, a.pageNumber AS page, a.cfi AS cfi, a.quote AS quote,
+                SELECT a.id AS id, d.contentHash AS sha, d.format AS format, a.pageNumber AS page, a.cfi AS cfi, a.quote AS quote,
                        a.prefix AS prefix, a.suffix AS suffix, a.note AS note, a.color AS color,
                        a.dateCreated AS created, a.dateModified AS modified,
                        a.kind AS kind, a.author AS author, a.origin AS origin, a.geometry AS geometry,
@@ -236,6 +236,13 @@ public struct CatalogPublisher: Sendable {
                     n["geometrie"] = objet
                 }
                 if sorte == "dessin" || sorte == "trait" {
+                    let rawFormat: String = r["format"]
+                    guard let format = DocumentFormat(rawValue: rawFormat),
+                          AnnotationDrawing.hasValidAnchor(kind: sorte == "trait" ? "stroke" : "drawing", format: format,
+                                                           quote: r["quote"], page: r["page"], cfi: r["cfi"],
+                                                           hasGeometry: (r["geometry"] as String?) != nil) else {
+                        kept.remove(id); continue
+                    }
                     guard let strokes: String = r["strokes"],
                           let traits = try? JSONDecoder().decode([AnnotationDrawing.Stroke].self, from: Data(strokes.utf8)),
                           let width: Double = r["width"], let height: Double = r["height"] else {
