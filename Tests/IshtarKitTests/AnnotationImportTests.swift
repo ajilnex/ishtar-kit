@@ -507,6 +507,32 @@ struct AnnotationImportTests {
         }
     }
 
+    @Test("Contexte absent ou vide : édition acceptée, représentation stockée conservée")
+    func contextesVides() async throws {
+        for kind in ["note", "dessin", "trait"] {
+            for storedEmpty in [true, false] {
+                let (db, _) = try await fixture()
+                var pose = kind == "note" ? operation() : drawingOperation(kind: kind)
+                pose.instantane.avant = storedEmpty ? "" : nil
+                pose.instantane.apres = storedEmpty ? nil : ""
+                #expect(try await run([pose], db: db).appliquees == 1)
+                let before = try #require(try await annotations(db).first)
+                var edit = pose
+                edit.opId = UUID().uuidString; edit.seq = 2; edit.op = "modifier"
+                edit.base = initial; edit.t = later; edit.instantane.modifie = later
+                edit.instantane.avant = storedEmpty ? nil : ""
+                edit.instantane.apres = storedEmpty ? "" : nil
+                edit.instantane.note = "Note modifiée"
+                #expect(try await run([edit], db: db).appliquees == 1)
+                let after = try #require(try await annotations(db).first)
+                #expect(after.prefix == before.prefix && after.suffix == before.suffix)
+                #expect(after.quote == before.quote && after.pageNumber == before.pageNumber)
+                #expect(after.note == "Note modifiée")
+                #expect(try await run([edit], db: db).deja == 1)
+            }
+        }
+    }
+
     @Test("Ancres dessin : séparation PDF/EPUB, CFI canonique et contrôles à la publication")
     func formatsEtPublication() async throws {
         for format in [DocumentFormat.pdf, .epub] {

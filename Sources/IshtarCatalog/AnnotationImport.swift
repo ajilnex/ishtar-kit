@@ -222,9 +222,12 @@ public struct AnnotationImport: Sendable {
             }
             else {
                 guard annotation.quote == existing.quote, annotation.pageNumber == existing.pageNumber,
-                      annotation.cfi == existing.cfi, annotation.prefix == existing.prefix,
-                      annotation.suffix == existing.suffix
+                      annotation.cfi == existing.cfi, (annotation.prefix ?? "") == (existing.prefix ?? ""),
+                      (annotation.suffix ?? "") == (existing.suffix ?? "")
                 else { return result("rejete", "ancre immuable") }
+                // La publication normalise les contextes vides en null ; conserver l’ancre stockée.
+                annotation.prefix = existing.prefix
+                annotation.suffix = existing.suffix
                 // Le Projet et la création appartiennent au catalogue, pas au lecteur.
                 annotation.projectId = existing.projectId
                 annotation.origin = existing.origin
