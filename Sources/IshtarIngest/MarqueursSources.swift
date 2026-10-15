@@ -52,5 +52,19 @@ public struct MarqueursSources: Sendable, Equatable {
     }
 
     /// Marqueurs courants, chargés une fois (paresseusement). Les tests peuvent les remplacer.
-    nonisolated(unsafe) public static var courants: MarqueursSources = charger()
+    public static var courants: MarqueursSources {
+        get { stockage.lire() }
+        set { stockage.ecrire(newValue) }
+    }
+
+    private static let stockage = Stockage(charger())
+
+    /// Valeur partagée protégée par un verrou (lectures et écritures concurrentes sûres).
+    private final class Stockage: @unchecked Sendable {
+        private let verrou = NSLock()
+        private var valeur: MarqueursSources
+        init(_ valeur: MarqueursSources) { self.valeur = valeur }
+        func lire() -> MarqueursSources { verrou.lock(); defer { verrou.unlock() }; return valeur }
+        func ecrire(_ nouvelle: MarqueursSources) { verrou.lock(); defer { verrou.unlock() }; valeur = nouvelle }
+    }
 }

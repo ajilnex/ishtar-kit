@@ -5,3 +5,4 @@ Icon?
 *.sqlite-wal
 *.sqlite-shm
 .swiftpm/
+marqueurs-sources.txt
