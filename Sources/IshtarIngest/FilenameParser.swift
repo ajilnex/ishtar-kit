@@ -6,6 +6,12 @@ import Foundation
 /// → ISBN/DOI + catalogues publics → LLM en dernier recours. À chaque étage la fiche
 /// est proposée, jamais imposée.
 public enum FilenameParser {
+    /// Marqueurs de sources ; injectables pour les tests.
+    public static var marqueurs: MarqueursSources {
+        get { MarqueursSources.courants }
+        set { MarqueursSources.courants = newValue }
+    }
+
     /// Analyse le nom d'un fichier (sans son chemin).
     public static func parse(fileName: String) -> MetadataGuess {
         let stem = (fileName as NSString).deletingPathExtension
@@ -13,8 +19,8 @@ public enum FilenameParser {
         if let guess = parseTiretsDoubles(stem: stem) { return guess }
         if let guess = parseLabel(stem: stem) { return guess }
         if let guess = parseAuthorYearTitle(stem: stem) { return guess }
-        if let guess = parseZLibrary(stem: stem) { return guess }
-        if let guess = parseScribd(stem: stem) { return guess }
+        if let guess = parseParentheseSource(stem: stem) { return guess }
+        if let guess = parsePrefixeNumerique(stem: stem) { return guess }
 
         let cleaned = stem
             .replacingOccurrences(of: "_", with: " ")
@@ -118,18 +124,18 @@ public enum FilenameParser {
         return parts[0] + " " + parts.dropFirst().joined(separator: "-")
     }
 
-    /// Convention Z-Library : `Titre (Auteur) (Z-Library).ext`, parfois avec plusieurs
-    /// parenthèses (année, édition) et un marqueur de copie `(1)`. Le marqueur final
-    /// `(Z-Library)` / `(Z-lib.org)` est écarté ; la dernière parenthèse restante qui
+    /// Convention à parenthèse de source : `Titre (Auteur) (Marqueur).ext`, parfois avec plusieurs
+    /// parenthèses (année, édition) et un marqueur de copie `(1)`. Le marqueur de source
+    /// (celui du fichier local `MarqueursSources`) est écarté ; la dernière parenthèse restante qui
     /// ressemble à un nom de personne devient l'auteur, le reste le titre. Au moindre
     /// doute sur l'auteur, on ne propose que le titre (repli honnête).
-    private static func parseZLibrary(stem: String) -> MetadataGuess? {
+    private static func parseParentheseSource(stem: String) -> MetadataGuess? {
         let groups = topLevelParentheticals(in: stem)
-        guard let zIndex = groups.lastIndex(where: { isZLibraryMarker($0.content) }) else {
+        guard let zIndex = groups.lastIndex(where: { isSourceMarker($0.content) }) else {
             return nil
         }
 
-        // Parenthèses situées avant le marqueur Z-Library ; celles d'après
+        // Parenthèses situées avant le marqueur de source ; celles d'après
         // (marqueurs de copie « (1) ») sont ignorées.
         let preceding = Array(groups[..<zIndex])
 
@@ -145,7 +151,7 @@ public enum FilenameParser {
         }
 
         // Le titre s'arrête avant l'auteur ; à défaut, avant la dernière parenthèse
-        // de tête (édition/année douteuse) ou, sinon, avant le marqueur Z-Library.
+        // de tête (édition/année douteuse) ou, sinon, avant le marqueur de source.
         let titleCut: String.Index
         if let authorStart {
             titleCut = authorStart
@@ -172,14 +178,14 @@ public enum FilenameParser {
         if let author {
             return MetadataGuess(title: title, author: author, year: year, confidence: .structured)
         }
-        // Fichier Z-Library reconnu mais auteur douteux : repli titre propre.
+        // Fichier à marqueur de source reconnu mais auteur douteux : repli titre propre.
         return MetadataGuess(title: title, year: year, confidence: .fallback)
     }
 
-    /// Convention Scribd : préfixe numérique `172233905-Fontaine-Claire-Le-Chant...`.
+    /// Convention à préfixe numérique : `172233905-Fontaine-Claire-Le-Chant...`.
     /// L'ID de 6 à 12 chiffres est écarté, les tirets deviennent des espaces. Aucun
     /// auteur fiable : reste un repli, mais avec un titre propre (l'étage 2 fera le reste).
-    private static func parseScribd(stem: String) -> MetadataGuess? {
+    private static func parsePrefixeNumerique(stem: String) -> MetadataGuess? {
         guard let rest = MetadataPatterns.firstMatch(#"^\d{6,12}-(.+)$"#, in: stem) else {
             return nil
         }
@@ -232,9 +238,9 @@ public enum FilenameParser {
         return result
     }
 
-    private static func isZLibraryMarker(_ content: String) -> Bool {
-        let token = content.trimmingCharacters(in: .whitespaces)
-        return MetadataPatterns.firstMatch(#"^z-?lib(rary|\.org)?$"#, in: token) != nil
+    private static func isSourceMarker(_ content: String) -> Bool {
+        let token = content.trimmingCharacters(in: .whitespaces).lowercased()
+        return marqueurs.parentheses.contains(token)
     }
 
     /// Nettoie et valide un candidat auteur tiré d'une parenthèse. Rend `nil` au

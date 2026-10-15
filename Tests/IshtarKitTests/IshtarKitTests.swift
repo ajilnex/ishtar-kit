@@ -106,6 +106,14 @@ enum Fixtures {
 
 @Suite("Entonnoir — étage nom de fichier")
 struct FilenameParserTests {
+    /// Marqueurs neutres de fixture (jamais les vrais noms de sites).
+    init() {
+        FilenameParser.marqueurs = MarqueursSources.parse("""
+        parenthese: Bibliotheque-X
+        parenthese: Bibliotheque-Y.org
+        """)
+    }
+
     @Test("Convention Auteur_Année_Titre")
     func authorYearTitle() {
         let guess = FilenameParser.parse(fileName: "Kant_1781_Critique-de-la-raison-pure.pdf")
@@ -140,43 +148,43 @@ struct FilenameParserTests {
         #expect(celan.title == "Grille de parole")
     }
 
-    @Test("Convention Z-Library avec auteur → structured")
-    func zLibraryWithAuthor() {
-        let simple = FilenameParser.parse(fileName: "Le cartographe, les routes de lhiver (Claire Fontaine) (Z-Library).pdf")
+    @Test("Convention à parenthèse de source avec auteur → structured")
+    func parentheseSourceWithAuthor() {
+        let simple = FilenameParser.parse(fileName: "Le cartographe, les routes de lhiver (Claire Fontaine) (Bibliotheque-X).pdf")
         #expect(simple.confidence == .structured)
         #expect(simple.title == "Le cartographe, les routes de lhiver")
         #expect(simple.author == "Claire Fontaine")
 
         // Doublons entre crochets et marqueur de copie « (1) ».
-        let inverse = FilenameParser.parse(fileName: "Sentiers – de la lumière (Fontaine, Claire [Fontaine, Claire]) (Z-Library)(1).epub")
+        let inverse = FilenameParser.parse(fileName: "Sentiers – de la lumière (Fontaine, Claire [Fontaine, Claire]) (Bibliotheque-X)(1).epub")
         #expect(inverse.confidence == .structured)
         #expect(inverse.title == "Sentiers – de la lumière")
         #expect(inverse.author == "Fontaine, Claire")
 
-        // Annotation nichée « (editor) » et variante Z-lib.org.
-        let nichee = FilenameParser.parse(fileName: "The Shape of Weather (Alan Mercer (editor)) (Z-lib.org).pdf")
+        // Annotation nichée « (editor) » et variante à suffixe.
+        let nichee = FilenameParser.parse(fileName: "The Shape of Weather (Alan Mercer (editor)) (Bibliotheque-Y.org).pdf")
         #expect(nichee.confidence == .structured)
         #expect(nichee.author == "Alan Mercer")
         #expect(nichee.title == "The Shape of Weather")
     }
 
-    @Test("Z-Library sans auteur fiable → repli titre propre")
-    func zLibraryDoubtfulAuthor() {
+    @Test("Marqueur de source sans auteur fiable → repli titre propre")
+    func parentheseSourceDoubtfulAuthor() {
         // Dernière parenthèse = marqueur d'édition, pas un nom.
-        let edition = FilenameParser.parse(fileName: "L'Odyssée des Cerfs Chapitre 1 (French Edition) (Z-Library).epub")
+        let edition = FilenameParser.parse(fileName: "L'Odyssée des Cerfs Chapitre 1 (French Edition) (Bibliotheque-X).epub")
         #expect(edition.confidence == .fallback)
         #expect(edition.author == nil)
         #expect(edition.title == "L'Odyssée des Cerfs Chapitre 1")
 
         // Dernière parenthèse = année seule.
-        let year = FilenameParser.parse(fileName: "Un manuscrit anonyme (2019) (Z-Library).pdf")
+        let year = FilenameParser.parse(fileName: "Un manuscrit anonyme (2019) (Bibliotheque-X).pdf")
         #expect(year.confidence == .fallback)
         #expect(year.author == nil)
         #expect(year.title == "Un manuscrit anonyme")
     }
 
-    @Test("Convention Scribd → repli avec titre nettoyé sans l'ID")
-    func scribdNumericPrefix() {
+    @Test("Convention à préfixe numérique → repli avec titre nettoyé sans l'ID")
+    func prefixeNumerique() {
         let simple = FilenameParser.parse(fileName: "104827365-Le-Pont-des-Voyelles.pdf")
         #expect(simple.confidence == .fallback)
         #expect(simple.author == nil)
@@ -1592,5 +1600,20 @@ struct PassageMatchesTests {
         #expect(PassageLocator.matches(
             of: "la sociologie des organisations bureaucratiques", in: page).isEmpty)
         #expect(PassageLocator.matches(of: "", in: page).isEmpty)
+    }
+}
+
+@Suite("Marqueurs de sources — fichier local hors dépôt")
+struct MarqueursSourcesTests {
+    @Test("Analyse : sections, commentaires, casse")
+    func parse() {
+        let m = MarqueursSources.parse("# commentaire\nparenthese: Exemple-Source # fin\nrebut: Exemple-Rebut\ninconnu: x\n")
+        #expect(m.parentheses == ["exemple-source"])
+        #expect(m.rebuts == ["exemple-rebut"])
+    }
+
+    @Test("Fichier absent → marqueurs vides, sans erreur")
+    func absent() {
+        #expect(MarqueursSources.charger(chemin: "/nonexistent/marqueurs.txt") == .vide)
     }
 }

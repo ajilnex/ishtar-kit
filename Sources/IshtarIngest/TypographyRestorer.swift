@@ -64,7 +64,7 @@ public enum TypographyRestorer {
                 tail.removeSubrange(paren)
             }
             let lowered = tail.lowercased()
-            let junk = ["z-library", "pdfdrive", "libgen", "www.", ".com", ".pdf", ".epub", ".mobi", "edition)"]
+            let junk = MarqueursSources.courants.rebuts + ["www.", ".com", ".pdf", ".epub", ".mobi", "edition)"]
             // Un texte répété deux fois de suite trahit une métadonnée bricolée.
             let words = tail.split(separator: " ")
             let doubled = words.count >= 4 && words.count % 2 == 0
