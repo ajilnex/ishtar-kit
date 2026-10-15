@@ -81,12 +81,17 @@ public struct Renaming: Sendable, Equatable {
     /// La fiche a été vérifiée (confiance haute) : son nom l'emporte sur
     /// l'ancien nom de fichier.
     public let verified: Bool
+    public let authors: [String]
+    public let publisher: String?
 
-    public init(documentId: UUID, from: String, to: String, verified: Bool = false) {
+    public init(documentId: UUID, from: String, to: String, verified: Bool = false,
+                authors: [String] = [], publisher: String? = nil) {
         self.documentId = documentId
         self.from = from
         self.to = to
         self.verified = verified
+        self.authors = authors
+        self.publisher = publisher
     }
 }
 
@@ -100,17 +105,19 @@ extension CatalogStore {
             let rows = try Row.fetchAll(conn, sql: """
                 SELECT d.id AS id, d.filePath AS path, d.format AS format, e.id AS editionId,
                        COALESCE(NULLIF(e.title, ''), w.title) AS title, w.date AS workDate, e.year AS editionYear,
-                       w.confidence AS confidence
+                       w.confidence AS confidence, e.publisher AS publisher
                 FROM document d JOIN edition e ON e.id = d.editionId JOIN work w ON w.id = e.workId
                 WHERE d.isMissing = 0 ORDER BY d.filePath
                 """)
             var authors: [UUID: [String]] = [:]
+            var authorNames: [UUID: [String]] = [:]
             for row in try Row.fetchAll(conn, sql: """
                 SELECT e.id AS editionId, c.name AS name, c.sortName AS sortName
                 FROM edition e JOIN work_creator wc ON wc.workId = e.workId AND wc.role = 'author'
                 JOIN creator c ON c.id = wc.creatorId ORDER BY wc.position
                 """) {
                 authors[row["editionId"], default: []].append(FileLabel.family(ofName: row["name"], sortName: row["sortName"]))
+                authorNames[row["editionId"], default: []].append(row["name"])
             }
             // Deux éditions d'une même œuvre au même format, deux fichiers d'une même édition :
             // l'année d'édition, puis [2], [3] départagent.
@@ -146,7 +153,8 @@ extension CatalogStore {
                 }
                 taken[dir, default: []].insert(target.lowercased())
                 plan.append(Renaming(documentId: row["id"], from: path, to: (dir as NSString).appendingPathComponent(target),
-                                     verified: (row["confidence"] as String) == "high"))
+                                     verified: (row["confidence"] as String) == "high",
+                                     authors: authorNames[row["editionId"]] ?? [], publisher: row["publisher"]))
             }
             return plan
         }

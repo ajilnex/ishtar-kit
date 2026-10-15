@@ -886,12 +886,8 @@ struct Ranger: AsyncParsableCommand {
             }
             if r.verified { return true }
             let old = FilenameParser.parse(fileName: (r.from as NSString).lastPathComponent)
-            let new = FilenameParser.parse(fileName: target)
-            if old.confidence == .structured, let a = old.author, let b = new.author, !Reidentification.isPlaceholder(a),
-               Reidentification.family(a) != Reidentification.family(b.components(separatedBy: " & ").first ?? b)
-                && !Reidentification.sameAuthor(a, b)
-                // Co-auteurs joints : « Badiou-Roudinesco » devient « Badiou & Roudinesco ».
-                && Reidentification.family(a.components(separatedBy: "-").first) != Reidentification.family(b.components(separatedBy: " & ").first ?? b) {
+            if old.confidence == .structured, let a = old.author, !Reidentification.isPlaceholder(a),
+               !RenamingGuard.authorsAgree(a, with: r.authors, publisher: r.publisher) {
                 held.append((r, "le nom de fichier dit « \(a) »")); return false
             }
             return true

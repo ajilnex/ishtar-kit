@@ -32,6 +32,12 @@ macOS 14+, Swift 6 ; tests hors bac à sable (OCR Vision). Linux : `ishtar` seul
 
 ## Publier
 
+Le contrôle de `ranger` compare les auteurs de l'ancien nom avec tous les auteurs
+de la notice, y compris les listes de noms inversés séparés par des virgules.
+Une mention d'éditeur séparée n'est écartée que si elle correspond exactement
+à l'éditeur enregistré. Un coauteur inconnu reste un conflit : le renommage
+est retenu pour vérification. Le plan à blanc permet de contrôler ce résultat.
+
 `ishtar publish --db catalog.sqlite --root <bibliothèque> --out <dossier>` écrit le « Catalogue publié » : `catalogue.json` (en dernier), `covers/`, et `corpus/` avec `--corpus`. `--exclude` (un nom vaut à toute profondeur) et `--exclude-title-prefix` fixent ce qui ne sort jamais ; `--dry-run` n'écrit rien. Format : SCHEMA.md ; contrat v1 : `contrats/` (dépôt `_PONTS`).
 
 Licence [Apache-2.0](LICENSE).
