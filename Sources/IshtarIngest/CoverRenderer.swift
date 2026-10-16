@@ -148,13 +148,17 @@ public enum CoverRenderer {
         }
     }
 
-    /// Une image quelconque (JPEG, PNG, GIF) ramenée à la taille des vignettes, en PNG.
+    /// Une image (JPEG, PNG, GIF, WebP) ramenée à la taille des vignettes, en PNG.
+    /// L'image vient d'un fichier de tiers : son format est reconnu à sa signature
+    /// et imposé à ImageMagick, qui tourne sous une politique stricte
+    /// (`MachineTools.runImageMagick`) ; toute autre chose n'est pas une couverture.
     static func thumbnail(of raw: Data) -> Data? {
-        MachineTools.withTemporaryDirectory { dir -> Data? in
+        guard let coder = MachineTools.imageCoder(for: raw) else { return nil }
+        return MachineTools.withTemporaryDirectory { dir -> Data? in
             let source = dir.appendingPathComponent("couverture")
             guard (try? raw.write(to: source)) != nil else { return nil }
             let box = "\(Int(pointSize.width * scale))x\(Int(pointSize.height * scale))"
-            guard let png = MachineTools.run("convert", [source.path + "[0]", "-auto-orient", "-thumbnail", box, "png:-"]),
+            guard let png = MachineTools.runImageMagick([coder + ":" + source.path + "[0]", "-auto-orient", "-thumbnail", box, "png:-"]),
                   !png.isEmpty else { return nil }
             return png
         }
@@ -165,10 +169,10 @@ public enum CoverRenderer {
     static func epubCover(_ url: URL) -> Data? {
         guard let archive = try? Archive(url: url, accessMode: .read),
               let container = TextExtractor.entryData(archive, "META-INF/container.xml"),
-              let containerXML = try? XMLDocument(data: container),
+              let containerXML = try? SafeXML.document(data: container),
               let opfPath = (try? containerXML.nodes(forXPath: "//*[local-name()='rootfile']/@full-path"))?.first?.stringValue,
               let opfData = TextExtractor.entryData(archive, opfPath),
-              let opf = try? XMLDocument(data: opfData)
+              let opf = try? SafeXML.document(data: opfData)
         else { return nil }
         let items = ((try? opf.nodes(forXPath: "//*[local-name()='manifest']/*[local-name()='item']")) ?? [])
             .compactMap { $0 as? XMLElement }

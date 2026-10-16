@@ -32,6 +32,36 @@ struct FondsAtelierTests {
         return files
     }
 
+    @Test("Un fonds retiré pendant l'atelier : ce qu'il a produit s'efface, le dépôt et le registre restent")
+    func produitsEffaces() throws {
+        let fonds = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: fonds) }
+        try write("livre", to: fonds.appendingPathComponent("recu/a.pdf"))
+        try write("{}", to: fonds.appendingPathComponent("depot.json"))
+        for nom in ["fichiers/a.pdf", "catalogue/catalog.sqlite", "catalogue/vignettes/a.png", "publication/corpus/x.deflate"] {
+            try write("produit", to: fonds.appendingPathComponent(nom))
+        }
+        FondsAtelier.clearProducts(in: fonds)
+        for nom in ["fichiers", "catalogue", "publication"] {
+            #expect(!FileManager.default.fileExists(atPath: fonds.appendingPathComponent(nom).path), "\(nom)")
+        }
+        #expect(FileManager.default.fileExists(atPath: fonds.appendingPathComponent("recu/a.pdf").path))
+        #expect(FileManager.default.fileExists(atPath: fonds.appendingPathComponent("depot.json").path))
+        // Absents : rien à faire, rien ne casse.
+        FondsAtelier.clearProducts(in: fonds)
+    }
+
+    @Test("Un dossier de travail qui est un lien est retiré lui-même : ce qu'il désigne n'est pas vidé")
+    func produitsLien() throws {
+        let fonds = try temporaryDirectory(), ailleurs = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: fonds); try? FileManager.default.removeItem(at: ailleurs) }
+        try write("à garder", to: ailleurs.appendingPathComponent("important.txt"))
+        try FileManager.default.createSymbolicLink(at: fonds.appendingPathComponent("publication"), withDestinationURL: ailleurs)
+        FondsAtelier.clearProducts(in: fonds)
+        #expect(FileManager.default.fileExists(atPath: ailleurs.appendingPathComponent("important.txt").path))
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: fonds.appendingPathComponent("publication").path)) == nil)
+    }
+
     @Test("Copies de travail : une par contenu, sans verrou, fiches Calibre comprises ; le dépôt intact")
     func copies() throws {
         let fonds = try temporaryDirectory()

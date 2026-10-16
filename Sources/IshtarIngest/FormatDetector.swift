@@ -186,7 +186,7 @@ public enum FormatDetector: Sendable {
     /// EPUB utilise aussi encryption.xml pour les polices embarquées libres
     /// de DRM. Le standard IDPF et le lecteur Foliate savent les désobfusquer.
     static func fontObfuscationOnly(_ data: Data) -> Bool {
-        guard let xml = try? XMLDocument(data: data, options: .nodeLoadExternalEntitiesNever),
+        guard let xml = try? SafeXML.document(data: data),
               let entries = try? xml.nodes(forXPath: "//*[local-name()='EncryptedData']"),
               !entries.isEmpty else { return false }
         let algorithms = ["http://www.idpf.org/2008/embedding", "http://ns.adobe.com/pdf/enc#RC"]

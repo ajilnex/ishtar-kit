@@ -114,11 +114,11 @@ public enum TextExtractor {
     static func extractEPUB(_ url: URL) -> ExtractedText? {
         guard let archive = try? Archive(url: url, accessMode: .read),
               let containerXML = entryData(archive, "META-INF/container.xml"),
-              let container = try? XMLDocument(data: containerXML),
+              let container = try? SafeXML.document(data: containerXML),
               let opfPath = (try? container.nodes(forXPath: "//*[local-name()='rootfile']/@full-path"))?
                   .first?.stringValue,
               let opfXML = entryData(archive, opfPath),
-              let opf = try? XMLDocument(data: opfXML)
+              let opf = try? SafeXML.document(data: opfXML)
         else { return nil }
 
         // Les href du manifest sont relatifs au dossier de l'OPF.
@@ -228,13 +228,13 @@ public enum TextExtractor {
     /// Texte d'un item XHTML. XMLDocument d'abord ; en cas d'échec de parsing
     /// (entités non déclarées, balisage cassé), repli par suppression des balises.
     static func xhtmlText(_ data: Data) -> String {
-        if let document = try? XMLDocument(data: data),
+        if let document = try? SafeXML.document(data: data),
            let body = (try? document.nodes(forXPath: "//*[local-name()='body']"))?.first,
            let value = body.stringValue
         {
             return normalizeWhitespace(value)
         }
-        if let document = try? XMLDocument(data: data), let value = document.rootElement()?.stringValue {
+        if let document = try? SafeXML.document(data: data), let value = document.rootElement()?.stringValue {
             return normalizeWhitespace(value)
         }
         let markup = String(data: data, encoding: .utf8)

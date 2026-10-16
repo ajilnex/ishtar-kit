@@ -50,6 +50,7 @@ public struct BnFConnector: Sendable {
     static func parse(sruResponse xml: Data, isbn: String) -> MetadataGuess? {
         let delegate = SRUDelegate()
         let parser = XMLParser(data: xml)
+        parser.shouldResolveExternalEntities = false
         parser.delegate = delegate
         parser.parse()
 

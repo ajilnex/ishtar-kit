@@ -126,9 +126,7 @@ struct Fonds: AsyncParsableCommand {
     /// Retiré pendant l'atelier ? Ce que l'atelier a produit s'efface alors aussi.
     func retiredMeanwhile() -> Bool {
         guard (try? FondsAtelier.depot(in: dossier))?.etat == "retire" else { return false }
-        for nom in ["fichiers", "catalogue", "publication"] {
-            try? FileManager.default.removeItem(at: dossier.appendingPathComponent(nom))
-        }
+        FondsAtelier.clearProducts(in: dossier)
         print("Fonds retiré pendant l'atelier : ce qu'il avait produit est effacé.")
         return true
     }

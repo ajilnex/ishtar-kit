@@ -108,11 +108,11 @@ public enum EmbeddedMetadata {
     static func readEPUB(_ url: URL) -> MetadataGuess? {
         guard let archive = try? Archive(url: url, accessMode: .read),
               let containerXML = extract(from: archive, path: "META-INF/container.xml"),
-              let container = try? XMLDocument(data: containerXML),
+              let container = try? SafeXML.document(data: containerXML),
               let opfPath = (try? container.nodes(forXPath: "//*[local-name()='rootfile']/@full-path"))?
                   .first?.stringValue,
               let opfXML = extract(from: archive, path: opfPath),
-              let opf = try? XMLDocument(data: opfXML)
+              let opf = try? SafeXML.document(data: opfXML)
         else { return nil }
         return guess(fromOPF: opf)
     }
@@ -176,7 +176,7 @@ public enum EmbeddedMetadata {
               let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return nil }
         let books = Set(names.filter { !$0.hasPrefix(".") && DocumentFormat(fileExtension: ($0 as NSString).pathExtension) != nil }
             .map { ($0 as NSString).deletingPathExtension })
-        guard books.count == 1, let opf = try? XMLDocument(data: data) else { return nil }
+        guard books.count == 1, let opf = try? SafeXML.document(data: data) else { return nil }
         return guess(fromOPF: opf)
     }
 

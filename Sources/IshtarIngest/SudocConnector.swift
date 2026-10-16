@@ -87,6 +87,7 @@ public struct SudocConnector: Sendable {
     static func parse(_ data: Data) -> [SudocRecord] {
         let delegate = UnimarcDelegate()
         let parser = XMLParser(data: data)
+        parser.shouldResolveExternalEntities = false
         parser.delegate = delegate
         parser.parse()
         return delegate.records

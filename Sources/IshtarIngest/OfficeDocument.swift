@@ -47,7 +47,7 @@ public enum OfficeDocument: Sendable {
     /// endroit du format où titre et auteur soient déclarés.
     public static func docxMetadata(_ url: URL) -> (title: String?, author: String?)? {
         guard let xml = zipEntry(url, "docProps/core.xml"),
-              let document = try? XMLDocument(data: xml) else { return nil }
+              let document = try? SafeXML.document(data: xml) else { return nil }
         func value(_ name: String) -> String? {
             let nodes = try? document.nodes(forXPath: "//*[local-name()='\(name)']")
             let raw = nodes?.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -74,7 +74,7 @@ public enum OfficeDocument: Sendable {
         guard let xml else { return nil }
         // Le corps du livre est dans <body> ; <binary> porte les images en
         // base64, qu'il ne faut surtout pas verser dans l'index.
-        if let document = try? XMLDocument(data: xml) {
+        if let document = try? SafeXML.document(data: xml) {
             for node in (try? document.nodes(forXPath: "//*[local-name()='binary']")) ?? [] {
                 node.detach()
             }
@@ -92,7 +92,7 @@ public enum OfficeDocument: Sendable {
     {
         let xml = zipped ? firstZipEntry(url) { $0.lowercased().hasSuffix(".fb2") }
                          : try? Data(contentsOf: url)
-        guard let xml, let document = try? XMLDocument(data: xml) else { return nil }
+        guard let xml, let document = try? SafeXML.document(data: xml) else { return nil }
 
         let title = (try? document.nodes(forXPath:
             "//*[local-name()='title-info']/*[local-name()='book-title']"))?
@@ -273,7 +273,7 @@ public enum OfficeDocument: Sendable {
     /// Rend le texte en gardant les frontières de paragraphes (double saut de
     /// ligne) : c'est sur elles que `TextExtractor.paginate` découpe ensuite.
     static func paragraphText(_ xml: Data, paragraphTag: String, textTag: String?) -> String? {
-        guard let document = try? XMLDocument(data: xml) else {
+        guard let document = try? SafeXML.document(data: xml) else {
             return TextExtractor.stripTags(
                 String(data: xml, encoding: .utf8) ?? String(decoding: xml, as: UTF8.self))
         }

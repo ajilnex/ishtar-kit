@@ -133,6 +133,26 @@ public enum FondsAtelier {
         try fm.moveItem(at: temporary, to: target)
     }
 
+    /// Efface ce que l'atelier a produit d'un fonds retiré (`fichiers`, `catalogue`, `publication`).
+    /// Sur le serveur, ces dossiers sont des points de montage du conteneur : on en vide le
+    /// contenu avant d'essayer de les retirer eux-mêmes (ce que fait Rayons, côté hôte).
+    /// `recu` et le registre ne sont pas touchés : ils ne sont pas à l'atelier.
+    public static func clearProducts(in fonds: URL) {
+        let fm = FileManager.default
+        for name in ["fichiers", "catalogue", "publication"] {
+            let folder = fonds.appendingPathComponent(name, isDirectory: true)
+            // Un lien est retiré lui-même : on ne vide jamais ce qu'il désigne.
+            if (try? fm.attributesOfItem(atPath: folder.path))?[.type] as? FileAttributeType == .typeSymbolicLink {
+                try? fm.removeItem(at: folder)
+                continue
+            }
+            for entry in (try? fm.contentsOfDirectory(atPath: folder.path)) ?? [] {
+                try? fm.removeItem(at: folder.appendingPathComponent(entry))
+            }
+            try? fm.removeItem(at: folder)
+        }
+    }
+
     /// Les copies qu'un passage interrompu a laissées en chemin.
     static func removeLeftovers(in fichiers: URL) {
         let fm = FileManager.default
