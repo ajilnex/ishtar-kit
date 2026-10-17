@@ -40,4 +40,6 @@ est retenu pour vérification. Le plan à blanc permet de contrôler ce résulta
 
 `ishtar publish --db catalog.sqlite --root <bibliothèque> --out <dossier>` écrit le « Catalogue publié » : `catalogue.json` (en dernier), `covers/`, et `corpus/` avec `--corpus`. `--exclude` (un nom vaut à toute profondeur) et `--exclude-title-prefix` fixent ce qui ne sort jamais ; `--dry-run` n'écrit rien. Format : SCHEMA.md ; contrat v1 : `contrats/` (dépôt `_PONTS`).
 
+`ishtar fusionner --db catalog.sqlite --cle <ancienne> --dans <gardée> [--preuve "…"] [--appliquer]` fusionne une édition (même à clé figée) dans une autre : ses documents passent à la gardée avec leurs annotations, ses auteurs, notes et collections sont reportés, l'ancienne clé devient une pierre (`fusionnée`) qui renvoie à la gardée — `publish` la rend dans `formerKeys`. Sans `--appliquer` : essai à blanc. Avec : Ishtar fermée, `ecriture.verrou` posé puis levé, une seule transaction, annulée si une annotation était perdue.
+
 Licence [Apache-2.0](LICENSE).

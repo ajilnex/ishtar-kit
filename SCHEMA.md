@@ -200,6 +200,8 @@ toutes les clés provisoires ; les clés figées et manuelles ne bougent jamais.
   clé provisoire (`generated`) n'a jamais pu sortir : elle ne laisse rien.
 - `verification` (clé : `documentId`, cascade) : `contentHash` (les octets lus),
   `readers`, `proof`, `dateVerified`. Elle ne vaut que pour ces octets-là.
+- `ishtar fusionner` écrit une pierre `reason` « fusionnée » (suivie de « : <preuve> » si donnée),
+  `replacedBy` = la clé gardée ; les pierres qui menaient à la clé absorbée sont redirigées vers la gardée.
 
 ## Migration v10 — Une clé retirée est gardée (07/10)
 
