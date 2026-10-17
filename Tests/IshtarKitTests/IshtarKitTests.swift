@@ -134,17 +134,74 @@ struct FilenameParserTests {
         #expect(guess.isbn13 == "9781234567897")
     }
 
-    @Test("Doubles tirets : dates de vie et forme inversée ne deviennent jamais l'auteur")
-    func doubleDashAuthorLifeDates() {
-        func author(_ field: String) -> String? {
-            FilenameParser.parse(fileName: "Le titre -- \(field) -- 2013;1988 -- Un éditeur -- 0123456789abcdef -- exemple.epub").author
+    /// Auteur, nom de fichier et clé qui en résultent, de bout en bout.
+    private func labelAndKey(_ field: String) -> (author: String?, label: String, key: String) {
+        let guess = FilenameParser.parse(fileName: "Le titre -- \(field) -- 2013;1988 -- Un éditeur -- 0123456789abcdef -- exemple.epub")
+        let names = (guess.author ?? "").split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+        let families = names.map { FileLabel.family(ofName: $0, sortName: nil) }
+        let label = FileLabel.name(families: families, title: "Le pli", year: "1988", ext: "epub")
+        let key = CiteKeyGenerator.base(author: names.first, year: "1988", title: "Le pli")
+        return (guess.author, label, key)
+    }
+
+    @Test("Doubles tirets : dates de vie entre parenthèses, avec virgule orpheline")
+    func lifeDatesParenthesized() {
+        for field in ["Gilles Deleuze, (1925-1995)", "Deleuze, Gilles (1925-1995)", "Gilles Deleuze (1925–1995)"] {
+            let r = labelAndKey(field)
+            #expect(r.author == "Gilles Deleuze", "\(field)")
+            #expect(r.label.hasPrefix("Deleuze — "), "\(field) → \(r.label)")
+            #expect(r.key == "Deleuze1988Pli", "\(field) → \(r.key)")
         }
-        #expect(author("Gilles Deleuze, (1925-1995)") == "Gilles Deleuze")
-        #expect(author("Deleuze, Gilles (1925-1995)") == "Gilles Deleuze")
-        #expect(author("(1925-1995)") == nil)
-        #expect(author("Badiou, Alain") == "Alain Badiou")
-        #expect(author("Hélène Marchand") == "Hélène Marchand")
-        #expect(author("Gilles Deleuze; Félix Guattari") == "Gilles Deleuze; Félix Guattari")
+    }
+
+    @Test("Doubles tirets : dates entre crochets, sans virgule, ouvertes, demi-cadratin, cadratin, « b. »")
+    func lifeDatesOtherForms() {
+        for field in ["Gilles Deleuze [1925-1995]", "Gilles Deleuze 1925-1995", "Gilles Deleuze, 1925-",
+                      "Gilles Deleuze 1925–1995", "Gilles Deleuze, 1925—1995", "Deleuze, Gilles, 1925-1995",
+                      "Gilles Deleuze, b. 1925", "1925-1995 Gilles Deleuze"] {
+            let r = labelAndKey(field)
+            #expect(r.author == "Gilles Deleuze", "\(field) → \(r.author ?? "nil")")
+            #expect(r.label.hasPrefix("Deleuze — "), "\(field) → \(r.label)")
+            #expect(r.key == "Deleuze1988Pli", "\(field) → \(r.key)")
+        }
+    }
+
+    @Test("Doubles tirets : un nom réduit à ses dates n'est pas un auteur")
+    func lifeDatesOnly() {
+        for field in ["(1925-1995)", "[1925-1995]", "1925-1995"] {
+            let r = labelAndKey(field)
+            #expect(r.author == nil, "\(field)")
+            #expect(r.label.hasPrefix("Anonyme — "), "\(field) → \(r.label)")
+            #expect(r.key.hasPrefix("Anon"), "\(field) → \(r.key)")
+        }
+    }
+
+    @Test("Doubles tirets : forme inversée, nom ordinaire")
+    func invertedAndPlain() {
+        let r = labelAndKey("Badiou, Alain")
+        #expect(r.author == "Alain Badiou")
+        #expect(r.label.hasPrefix("Badiou — "))
+        #expect(r.key == "Badiou1988Pli")
+        #expect(labelAndKey("Hélène Marchand").author == "Hélène Marchand")
+    }
+
+    @Test("Doubles tirets : liste séparée par « ; », chaque nom nettoyé")
+    func authorListSplit() {
+        let r = labelAndKey("Deleuze, Gilles, 1925-1995; Guattari, Félix, 1930-1992")
+        #expect(r.author == "Gilles Deleuze; Félix Guattari")
+        #expect(r.label.hasPrefix("Deleuze & Guattari — "))
+        #expect(r.key == "Deleuze1988Pli")
+        #expect(labelAndKey("Gilles Deleuze (1925-1995); ; Félix Guattari [1930-1992]").author == "Gilles Deleuze; Félix Guattari")
+        // Une liste séparée par des virgules, avec une virgule doublée.
+        #expect(TypographyRestorer.normalizedAuthor("Gilles Deleuze, , Félix Guattari") == "Gilles Deleuze, Félix Guattari")
+    }
+
+    @Test("Un nom de famille contient au moins une lettre (étiquette et clé)")
+    func familyNeedsALetter() {
+        #expect(FileLabel.family(ofName: "Gilles Deleuze (1925-1995)", sortName: nil) == "Deleuze")
+        #expect(FileLabel.family(ofName: "Gilles Deleuze", sortName: "1925-1995, Deleuze") == "Deleuze")
+        #expect(CiteKeyGenerator.base(author: "Gilles Deleuze (1925-1995)", year: "1988", title: "Le pli") == "Deleuze1988Pli")
+        #expect(CiteKeyGenerator.base(author: "(1925-1995)", year: "1988", title: "Le pli") == "Anon1988Pli")
     }
 
     @Test("Un nom réduit à ses dates de vie est vide, une virgule orpheline tombe")

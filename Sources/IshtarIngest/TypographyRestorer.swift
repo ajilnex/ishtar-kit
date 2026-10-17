@@ -85,17 +85,27 @@ public enum TypographyRestorer {
     /// dans l'ordre, un nom en capitales ramené à la casse ordinaire
     /// (« Erik PORGE » → « Erik Porge »). Pur.
     public static func normalizedAuthor(_ raw: String) -> String {
-        var name = raw.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: " ", options: .regularExpression)
+        let dash = #"[-–—]"#
+        var name = raw
+            // Mentions entre parenthèses ou entre crochets : dates de vie, fonction, doublon.
+            .replacingOccurrences(of: #"\s*[\(\[][^\)\]]*[\)\]]"#, with: " ", options: .regularExpression)
             // Crochets d'une notice mal lue : « David] David Spiegelhalter [Spiegelhalter ».
             .replacingOccurrences(of: #"\[[^\]]*$|^[^\[]*\]"#, with: "", options: .regularExpression)
-            // Dates de vie en tête : « 1040-1105 Rashi ».
-            .replacingOccurrences(of: #"^\s*\d{3,4}\s*-\s*\d{3,4}\s+"#, with: "", options: .regularExpression)
-            // Dates de vie à la manière des catalogues : « Deleuze, Gilles, 1925-1995 ».
-            .replacingOccurrences(of: #",\s*\d{3,4}\s*-\s*(\d{3,4}|\.{0,4})\s*$"#, with: "", options: .regularExpression)
+            // Dates de vie en tête : « 1040-1105 Rashi », « 1925- Gilles Deleuze ».
+            .replacingOccurrences(of: #"^\s*\d{3,4}\s*"# + dash + #"\s*(\d{3,4})?\s+"#, with: "", options: .regularExpression)
+            // Dates de vie en queue, avec ou sans virgule, ouvertes ou fermées, tiret court,
+            // demi-cadratin ou cadratin, « b. 1937 » : « Deleuze, Gilles, 1925-1995 »,
+            // « Gilles Deleuze 1925–1995 », « Gilles Deleuze, 1925- », « Alain Badiou, b. 1937 ».
+            .replacingOccurrences(of: #"[,\s]+(?:(?:b|d|c|ca|born|died)\.?\s*)?\d{3,4}\s*(?:"# + dash + #"\s*\d{0,4})?\s*$"#,
+                                  with: "", options: [.regularExpression, .caseInsensitive])
+            // Virgules doublées ou orphelines : « Gilles Deleuze, , Félix Guattari ».
+            .replacingOccurrences(of: #",(\s*,)+"#, with: ",", options: .regularExpression)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
         // Une virgule laissée seule par le retrait d'une parenthèse :
         // « Gilles Deleuze, (1925-1995) » → « Gilles Deleuze ».
         name = name.trimmingCharacters(in: CharacterSet(charactersIn: " ,;"))
+        // Plus aucune lettre (« 1925-1995 » seul) : ce n'est pas un nom.
+        guard name.contains(where: \.isLetter) else { return "" }
         // « Büttgen, Philippe » → « Philippe Büttgen » ; mais « Gilles Deleuze,
         // Félix Guattari » est une liste, pas une forme inversée.
         if let inverted = invertedForm(name) { name = inverted }
@@ -104,6 +114,16 @@ public enum TypographyRestorer {
             guard letters.count > 1, letters == letters.uppercased() else { return String(word) }
             return word.lowercased().split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: "-")
         }.joined(separator: " ")
+    }
+
+    /// Un champ auteur qui peut contenir plusieurs personnes séparées par « ; » :
+    /// chaque nom est normalisé (dates retirées, ordre rétabli), les noms vides
+    /// disparaissent, le tout est rejoint par « ; ». Pur.
+    public static func normalizedAuthors(_ raw: String) -> String {
+        raw.split(separator: ";", omittingEmptySubsequences: true)
+            .map { normalizedAuthor(String($0)) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "; ")
     }
 
     /// Particules qui restent avec le nom de famille : « Brunhoff, Suzanne de ».

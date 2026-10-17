@@ -101,7 +101,8 @@ public enum CiteKeyGenerator {
             let parts = words(head)
             if !parts.isEmpty { return parts.map(capitalized).joined() }
         }
-        let tokens = author.split(whereSeparator: \.isWhitespace).map(String.init)
+        // Un nom de famille contient au moins une lettre : « (1925-1995) » n'en est pas un.
+        let tokens = author.split(whereSeparator: \.isWhitespace).map(String.init).filter { $0.contains(where: \.isLetter) }
         guard let last = tokens.last else { return nil }
         var name = last
         let n = tokens.count

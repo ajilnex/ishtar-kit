@@ -54,8 +54,8 @@ public enum FilenameParser {
         // Le champ auteur de cette convention porte souvent des dates de vie
         // (« Gilles Deleuze, (1925-1995) ») ou la forme « Nom, Prénom » : il
         // est ramené à « Prénom Nom », et s'il ne reste aucun nom (« (1925-1995) »
-        // seul), il n'y a pas d'auteur. Une liste de noms reste telle quelle.
-        let cleanedAuthor = parts[1].contains(";") ? parts[1] : TypographyRestorer.normalizedAuthor(parts[1])
+        // seul), il n'y a pas d'auteur. Une liste séparée par « ; » est traitée nom par nom.
+        let cleanedAuthor = TypographyRestorer.normalizedAuthors(parts[1])
         let author = cleanedAuthor.isEmpty ? nil : cleanedAuthor
         guard !title.isEmpty else { return nil }
 

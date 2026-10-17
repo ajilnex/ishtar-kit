@@ -16,13 +16,15 @@ public enum FileLabel {
     static let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
 
     public static func family(ofName name: String, sortName: String?) -> String {
-        if let sortName, let family = sortName.components(separatedBy: ",").first, !family.isEmpty {
+        if let sortName, let family = sortName.components(separatedBy: ",").first,
+           family.contains(where: \.isLetter) {
             return family.trimmingCharacters(in: .whitespaces)
         }
         // Une particule en capitale fait partie du nom (« André De Tienne »,
         // « Ursula K. Le Guin », et « Le Guin » seul, tiré d'un nom de fichier) ;
         // en minuscule, non (« Michel de Montaigne »).
-        let words = name.split(whereSeparator: \.isWhitespace).map(String.init)
+        // Un nom de famille contient au moins une lettre : « (1925-1995) » n'en est pas un.
+        let words = name.split(whereSeparator: \.isWhitespace).map(String.init).filter { $0.contains(where: \.isLetter) }
         guard let last = words.last else { return name }
         if words.count >= 2, ["De", "Van", "Le", "La", "Du", "Di", "Da", "Del", "Des", "Von", "Ten", "Ter"].contains(words[words.count - 2]) {
             return words[words.count - 2] + " " + last
