@@ -93,6 +93,9 @@ public enum TypographyRestorer {
             // Dates de vie à la manière des catalogues : « Deleuze, Gilles, 1925-1995 ».
             .replacingOccurrences(of: #",\s*\d{3,4}\s*-\s*(\d{3,4}|\.{0,4})\s*$"#, with: "", options: .regularExpression)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        // Une virgule laissée seule par le retrait d'une parenthèse :
+        // « Gilles Deleuze, (1925-1995) » → « Gilles Deleuze ».
+        name = name.trimmingCharacters(in: CharacterSet(charactersIn: " ,;"))
         // « Büttgen, Philippe » → « Philippe Büttgen » ; mais « Gilles Deleuze,
         // Félix Guattari » est une liste, pas une forme inversée.
         if let inverted = invertedForm(name) { name = inverted }

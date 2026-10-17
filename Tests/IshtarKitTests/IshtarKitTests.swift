@@ -134,6 +134,25 @@ struct FilenameParserTests {
         #expect(guess.isbn13 == "9781234567897")
     }
 
+    @Test("Doubles tirets : dates de vie et forme inversée ne deviennent jamais l'auteur")
+    func doubleDashAuthorLifeDates() {
+        func author(_ field: String) -> String? {
+            FilenameParser.parse(fileName: "Le titre -- \(field) -- 2013;1988 -- Un éditeur -- 0123456789abcdef -- exemple.epub").author
+        }
+        #expect(author("Gilles Deleuze, (1925-1995)") == "Gilles Deleuze")
+        #expect(author("Deleuze, Gilles (1925-1995)") == "Gilles Deleuze")
+        #expect(author("(1925-1995)") == nil)
+        #expect(author("Badiou, Alain") == "Alain Badiou")
+        #expect(author("Hélène Marchand") == "Hélène Marchand")
+        #expect(author("Gilles Deleuze; Félix Guattari") == "Gilles Deleuze; Félix Guattari")
+    }
+
+    @Test("Un nom réduit à ses dates de vie est vide, une virgule orpheline tombe")
+    func lifeDatesOnlyName() {
+        #expect(TypographyRestorer.normalizedAuthor("(1925-1995)") == "")
+        #expect(TypographyRestorer.normalizedAuthor("Gilles Deleuze, (1925-1995)") == "Gilles Deleuze")
+    }
+
     @Test("Sans-date ND et suffixe de copie (convention Auteur_Année_Titre)")
     func noDateAndCopySuffix() {
         let sellars = FilenameParser.parse(fileName: "Sellars_ND_Kant-s-Transcendental-Idealism.txt")
