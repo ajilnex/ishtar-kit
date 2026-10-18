@@ -250,4 +250,12 @@ struct FusionTests {
         jeton.liberer()
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("ecriture.verrou").path))
     }
+
+    @Test("Verrou d'écriture : les veilleurs de launchd ne tiennent pas le catalogue")
+    func veilleurs() {
+        #expect(!EcritureVerrou.processusQuiComptent(sortieLsof: ""))
+        #expect(!EcritureVerrou.processusQuiComptent(sortieLsof: "p601\ncUserEventAgent\nf397"))
+        #expect(EcritureVerrou.processusQuiComptent(sortieLsof: "p601\ncUserEventAgent\np702\ncsqlite3"))
+        #expect(EcritureVerrou.processusQuiComptent(sortieLsof: "p88\ncIshtar"))
+    }
 }

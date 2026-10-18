@@ -38,13 +38,26 @@ public enum EcritureVerrou {
                 // Seuls les fichiers qui existent : lsof signale les autres sur sa sortie d'erreur (écartée).
                 let fichiers = [catalogue.path, catalogue.path + "-wal", catalogue.path + "-shm"]
                     .filter { FileManager.default.fileExists(atPath: $0) }
-                let r = try sortie("/usr/sbin/lsof", fichiers)
+                let r = try sortie("/usr/sbin/lsof", ["-F", "c"] + fichiers)
                 guard r.statut <= 1 else { throw Refus(message: "Impossible de vérifier les fichiers ouverts ; arrêt.") }
-                return !r.texte.isEmpty
+                return processusQuiComptent(sortieLsof: r.texte)
                 #else
                 return false
                 #endif
             })
+    }
+
+    /// Les veilleurs de launchd (`WatchPaths` de l'agent de publication vers Rayons)
+    /// tiennent le catalogue ouvert pour être prévenus d'un changement, sans jamais
+    /// le lire ni l'écrire : ils ne s'opposent pas à une écriture.
+    static let veilleurs: Set<String> = ["UserEventAgent", "launchd"]
+
+    /// Vrai si la sortie `lsof -F c` nomme un processus autre qu'un veilleur.
+    static func processusQuiComptent(sortieLsof: String) -> Bool {
+        sortieLsof.split(separator: "\n")
+            .filter { $0.hasPrefix("c") }
+            .map { String($0.dropFirst()) }
+            .contains { !veilleurs.contains($0) }
     }
 
     public static func url(pour catalogue: URL) -> URL {
