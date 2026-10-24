@@ -65,6 +65,51 @@ struct CiteKeyTests {
         #expect(!CiteKeyGenerator.isValidManualKey(""))
     }
 
+    @Test("Collectivités : le sigle des mots significatifs ; personnes inchangées")
+    func corporateAcronym() {
+        #expect(CiteKeyGenerator.base(author: "Agence française de développement", year: "2024",
+                                      title: "L'économie africaine 2024") == "AFD2024Economie")
+        #expect(CiteKeyGenerator.base(author: "Organisation de coopération et de développement économiques", year: "2020",
+                                      title: "Perspectives") == "OCDE2020Perspectives")
+        #expect(CiteKeyGenerator.base(author: "Banque mondiale", year: "2019", title: "Rapport") == "BM2019Rapport")
+        #expect(CiteKeyGenerator.base(author: "Institute for Advanced Study", year: "1950", title: "Report") == "IAS1950Report")
+        // Type d'autorité connu : pas besoin du premier mot.
+        #expect(CiteKeyGenerator.base(author: "Centre national de la recherche scientifique", year: "2000", title: "Rapport", corporate: true) == "CNRS2000Rapport")
+        #expect(CiteKeyGenerator.base(author: "Bibliothèque nationale de France", year: "2000", title: "Rapport", corporate: true) == "BNF2000Rapport")
+        // Nom déjà en capitales : tel quel.
+        #expect(CiteKeyGenerator.base(author: "UNESCO", year: "1995", title: "Rapport", corporate: true) == "UNESCO1995Rapport")
+        // La forme de classement prime.
+        #expect(CiteKeyGenerator.base(author: "Bibliothèque nationale de France", sortName: "BnF", year: "2000",
+                                      title: "Rapport", corporate: true) == "BnF2000Rapport")
+        #expect(CiteKeyGenerator.base(author: "Agence française de développement", sortName: "AFD", year: "2024",
+                                      title: "Économie") == "AFD2024Economie")
+        // Personnes inchangées.
+        #expect(CiteKeyGenerator.base(author: "Pierre de Fermat", year: "1637", title: "Notes") == "Fermat1637Notes")
+        #expect(CiteKeyGenerator.base(author: "Kant, Immanuel", sortName: "Kant, Immanuel", year: "1781", title: "Critique") == "Kant1781Critique")
+    }
+
+    @Test("Collectivité : une clé existante, figée ou manuelle, ne bouge pas")
+    func corporateExistingKeysFrozen() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let store = CatalogStore(db: db)
+        let frozen = try await addEdition(db, author: "Agence française de développement", title: "L'économie africaine", editionYear: "2024")
+        let manual = try await addEdition(db, author: "Banque mondiale", title: "Rapport", editionYear: "2019")
+        let fresh = try await addEdition(db, author: "Organisation internationale du travail", title: "Emploi", editionYear: "2021")
+        try await db.pool.write { conn in
+            try EditionKey(editionId: frozen, key: "Developpement2024Economie", origin: .stable).insert(conn)
+            try EditionKey(editionId: manual, key: "Mondiale2019Rapport", origin: .manual).insert(conn)
+        }
+        try await store.assignMissingKeys()
+        _ = try await store.recomputeProvisionalKeys()
+        #expect(try await store.key(forEdition: frozen)?.key == "Developpement2024Economie")
+        #expect(try await store.key(forEdition: manual)?.key == "Mondiale2019Rapport")
+        #expect(try await store.key(forEdition: fresh)?.key == "OIT2021Emploi")
+        // La clé ancienne reste « juste » : `cles` ne la propose pas au remplacement.
+        #expect(CiteKeyGenerator.agrees(key: "Developpement2024Economie", author: "Agence française de développement",
+                                        sortName: nil, year: "2024", title: "L'économie africaine"))
+        #expect(try await store.disagreeingKeys().isEmpty)
+    }
+
     // MARK: Catalogue
 
     private func addEdition(_ db: CatalogDatabase, author: String?, title: String,

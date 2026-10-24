@@ -95,7 +95,8 @@ public enum CiteKeyGenerator {
     /// dernier mot séparé par des espaces, entier — un nom composé à trait
     /// d'union (« De-Tienne », « Merleau-Ponty ») reste d'un seul tenant — avec
     /// sa particule en capitale.
-    static func family(_ author: String, sortName: String? = nil) -> String? {
+    static func family(_ author: String, sortName: String? = nil, corporate: Bool = false, corporateRule: Bool = true) -> String? {
+        if corporateRule, corporate || isCorporateName(author), let key = corporateKey(author, sortName: sortName) { return key }
         if let sortName, let head = sortName.components(separatedBy: ",").first,
            !head.trimmingCharacters(in: .whitespaces).isEmpty {
             let parts = words(head)
@@ -121,6 +122,40 @@ public enum CiteKeyGenerator {
         return parts.map(capitalized).joined()
     }
 
+    /// Premiers mots qui désignent une collectivité quand aucune notice
+    /// d'autorité n'en dit le type (IdRef ou BnF « collectivité », Wikidata
+    /// « organisation » : alors l'appelant passe `corporate: true`). Liste courte,
+    /// sans accents, en minuscules.
+    static let corporateFirstWords: Set<String> = [
+        "agence", "institut", "institute", "universite", "university", "organisation", "organization",
+        "office", "centre", "center", "commission", "conseil", "council", "banque", "bank",
+        "fondation", "foundation", "ministere", "societe", "society", "association", "comite", "committee",
+    ]
+
+    /// Le nom commence-t-il par un mot de la liste des collectivités ?
+    static func isCorporateName(_ name: String) -> Bool {
+        guard let first = words(name).first else { return false }
+        return corporateFirstWords.contains(first.lowercased())
+    }
+
+    /// Clé d'une collectivité : son sigle (« Agence française de développement »
+    /// → `AFD`, « Banque mondiale » → `BM`). La forme de classement prime quand
+    /// elle est un mot seul, telle quelle (« AFD », « BnF ») ; une forme inversée
+    /// (« Nom, Prénom ») n'est pas un sigle et passe son tour. Un nom déjà en
+    /// capitales (« UNESCO ») reste tel quel.
+    static func corporateKey(_ name: String, sortName: String?) -> String? {
+        if let sortName, !sortName.contains(",") {
+            let parts = words(sortName)
+            if parts.count == 1 { return parts[0] }
+        }
+        let all = words(name)
+        if all.count == 1, all[0].count > 1, all[0] == all[0].uppercased() { return all[0] }
+        let initials = all.filter { $0.count > 1 && !stopwords.contains($0.lowercased()) }
+            .compactMap { $0.first.map { String($0).uppercased() } }
+        guard initials.count >= 2 else { return nil }
+        return initials.joined()
+    }
+
     /// Les quatre chiffres d'une année (« 1951 », « c. 1951 », « 1951-1953 »),
     /// sinon nil. Une année ancienne, seule dans le champ (« -350 » avant
     /// notre ère, « 14 »), rend ses chiffres sans signe : `Aristote350Traite`
@@ -142,8 +177,9 @@ public enum CiteKeyGenerator {
     }
 
     /// La clé de base, sans désambiguïsation.
-    public static func base(author: String?, sortName: String? = nil, year yearValue: String?, title: String) -> String {
-        let name = author.flatMap { family($0, sortName: sortName) } ?? "Anon"
+    public static func base(author: String?, sortName: String? = nil, year yearValue: String?, title: String,
+                            corporate: Bool = false, corporateRule: Bool = true) -> String {
+        let name = author.flatMap { family($0, sortName: sortName, corporate: corporate, corporateRule: corporateRule) } ?? "Anon"
         return name + (year(yearValue) ?? "ND") + (titleWords(title).first ?? "")
     }
 
@@ -426,14 +462,19 @@ extension CiteKeyGenerator {
     /// puis d'un suffixe d'édition (`-2003`, `-en`, `-b`). La casse est ignorée.
     public static func agrees(key: String, author: String?, sortName: String?, year: String?, title: String) -> Bool {
         let stem = String(key.split(separator: "-", maxSplits: 1).first ?? Substring(key)).lowercased()
-        let expected = base(author: author, sortName: sortName, year: year, title: title).lowercased()
-        guard stem.hasPrefix(expected) else { return false }
-        let rest = String(stem.dropFirst(expected.count))
-        if rest.isEmpty { return true }
-        let words = titleWords(title).map { $0.lowercased() }
-        for i in words.indices.dropFirst() {
-            if rest == words[i] { return true }
-            if i + 1 < words.count, rest == words[i] + words[i + 1] { return true }
+        // Les clés d'une collectivité nées avant la règle du sigle
+        // (`Developpement2024Economie`) restent justes : la règle ne vaut que
+        // pour les clés à créer.
+        for rule in [true, false] {
+            let expected = base(author: author, sortName: sortName, year: year, title: title, corporateRule: rule).lowercased()
+            guard stem.hasPrefix(expected) else { continue }
+            let rest = String(stem.dropFirst(expected.count))
+            if rest.isEmpty { return true }
+            let words = titleWords(title).map { $0.lowercased() }
+            for i in words.indices.dropFirst() {
+                if rest == words[i] { return true }
+                if i + 1 < words.count, rest == words[i] + words[i + 1] { return true }
+            }
         }
         return false
     }

@@ -20,6 +20,10 @@
 3. Toute proposition d'identification est *proposée*, jamais imposée.
 4. Le schéma SQLite est un format d'échange documenté ([SCHEMA.md](SCHEMA.md)).
 
+## Clés de citation
+
+Une clé se compose du nom de famille du premier auteur, de l'année de l'œuvre et du premier mot significatif du titre (`Adorno1951Minima`). Quand l'auteur est une collectivité, la clé prend son sigle, fait des initiales de ses mots significatifs (`AFD2024Economie` pour l'Agence française de développement, `OCDE`, `BM`) : la forme de classement d'une notice, quand elle est un mot seul (« AFD », « BnF »), prime toujours. La collectivité se reconnaît à un premier mot d'une liste courte (Agence, Institut, Université, Banque, Fondation, Comité…), ou au type de sa notice d'autorité quand l'appelant le donne. La règle ne vaut que pour les clés à créer : les clés existantes, figées ou manuelles ne bougent pas (`ishtar auteurs` avec `tri`, puis `ishtar cles`, pour en corriger une).
+
 ## Développement
 
 ```sh
