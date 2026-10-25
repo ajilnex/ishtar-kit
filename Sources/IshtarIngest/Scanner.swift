@@ -92,6 +92,7 @@ public struct LibraryScanner: Sendable {
         }
 
         let rootPath = directory.standardizedFileURL.path
+        let ignored = Self.ignoredPaths(root: directory)
 
         for case let fileURL as URL in enumerator {
             let resources: URLResourceValues
@@ -126,6 +127,10 @@ public struct LibraryScanner: Sendable {
             }
 
             let standardized = fileURL.standardizedFileURL
+            if !ignored.isEmpty, standardized.path.hasPrefix(rootPath + "/"),
+               ignored.contains(String(standardized.path.dropFirst(rootPath.count + 1)).precomposedStringWithCanonicalMapping) {
+                continue
+            }
             let folderPath = standardized.deletingLastPathComponent().path
             let relativeFolder = folderPath.hasPrefix(rootPath)
                 ? String(folderPath.dropFirst(rootPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -167,6 +172,20 @@ public struct LibraryScanner: Sendable {
             .sorted { $0[0].path < $1[0].path }
 
         return report
+    }
+
+    /// Fichiers que le propriétaire a retirés du catalogue sans les déplacer (papiers
+    /// personnels rangés dans `_NON_BIBLIO`, par exemple) : `.ishtar-ignorer` à la racine,
+    /// un chemin relatif par ligne, `#` pour un commentaire. Comparaison en NFC : le nom
+    /// sur disque et la ligne écrite peuvent différer de forme.
+    static let ignoreFileName = ".ishtar-ignorer"
+
+    static func ignoredPaths(root: URL) -> Set<String> {
+        guard let text = try? String(contentsOf: root.appendingPathComponent(ignoreFileName), encoding: .utf8) else { return [] }
+        return Set(text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+            .map { $0.precomposedStringWithCanonicalMapping })
     }
 
     /// SHA-256 en lecture par blocs — les bibliothèques réelles contiennent des PDF de plusieurs Go.
