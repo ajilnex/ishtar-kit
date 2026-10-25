@@ -17,8 +17,9 @@
 
 1. Le scan et l'ingestion ne touchent jamais le réseau ni l'IA.
 2. Le dossier de l'utilisateur n'est jamais modifié, sauf par `ranger`, `doublons` et `corriger` (`--appliquer`, journal pour défaire).
-3. Toute proposition d'identification est *proposée*, jamais imposée.
-4. Le schéma SQLite est un format d'échange documenté ([SCHEMA.md](SCHEMA.md)).
+3. Une copie identique (même empreinte) à un document déjà catalogué rejoint son édition, marquée doublon : l'ingestion ne crée jamais une seconde fiche pour un même contenu.
+4. Toute proposition d'identification est *proposée*, jamais imposée.
+5. Le schéma SQLite est un format d'échange documenté ([SCHEMA.md](SCHEMA.md)).
 
 ## Clés de citation
 
@@ -43,6 +44,8 @@ Une mention d'éditeur séparée n'est écartée que si elle correspond exacteme
 est retenu pour vérification. Le plan à blanc permet de contrôler ce résultat.
 
 `ishtar publish --db catalog.sqlite --root <bibliothèque> --out <dossier>` écrit le « Catalogue publié » : `catalogue.json` (en dernier), `covers/`, et `corpus/` avec `--corpus`. `--exclude` (un nom vaut à toute profondeur) et `--exclude-title-prefix` fixent ce qui ne sort jamais ; `--dry-run` n'écrit rien. Format : SCHEMA.md ; contrat v1 : `contrats/` (dépôt `_PONTS`).
+
+`ishtar corriger` retrouve un fichier par son nom quelle que soit sa forme Unicode (NFC ou NFD, celle du disque sous macOS).
 
 `ishtar fusionner --db catalog.sqlite --cle <ancienne> --dans <gardée> [--preuve "…"] [--appliquer]` fusionne une édition (même à clé figée) dans une autre : ses documents passent à la gardée avec leurs annotations, ses auteurs, notes et collections sont reportés, l'ancienne clé devient une pierre (`fusionnée`) qui renvoie à la gardée — `publish` la rend dans `formerKeys`. Sans `--appliquer` : essai à blanc. Avec : Ishtar fermée, `ecriture.verrou` posé puis levé, une seule transaction, annulée si une annotation était perdue. La garde d'écriture ignore `launchd` et `UserEventAgent` : les veilleurs launchd (`WatchPaths`) ne tiennent le catalogue que pour le surveiller et ne bloquent pas.
 

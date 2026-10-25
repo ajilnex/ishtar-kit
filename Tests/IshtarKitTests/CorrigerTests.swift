@@ -36,4 +36,25 @@ struct CorrigerTests {
         #expect(apres.2 == .probable)
         #expect(apres.3 == .low)
     }
+
+    @Test("Un nom accentué donné en NFC trouve le chemin du catalogue en NFD, et inversement")
+    func nomAccentue() async throws {
+        let db = try CatalogDatabase(inMemory: ())
+        let nom = "Dupré — Éléments d'une théorie (1999).pdf"
+        let document = try await db.pool.write { conn in
+            let work = Work(title: "Éléments d'une théorie")
+            try work.insert(conn)
+            let edition = Edition(workId: work.id)
+            try edition.insert(conn)
+            let document = Document(editionId: edition.id, filePath: "/lib/A/" + nom.decomposedStringWithCanonicalMapping,
+                                    originalFileName: nom.decomposedStringWithCanonicalMapping,
+                                    fileSize: 10, contentHash: "bbb", format: .pdf)
+            try document.insert(conn)
+            return document.id
+        }
+        let store = CatalogStore(db: db)
+        #expect(try await store.document(named: nom.precomposedStringWithCanonicalMapping)?.documentId == document)
+        #expect(try await store.document(named: nom.decomposedStringWithCanonicalMapping)?.documentId == document)
+        #expect(try await store.document(named: "A/" + nom.precomposedStringWithCanonicalMapping)?.documentId == document)
+    }
 }

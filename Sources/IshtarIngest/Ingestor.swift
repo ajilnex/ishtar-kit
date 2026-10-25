@@ -22,6 +22,8 @@ public struct IngestReport: Sendable, Equatable {
     public var recognized = 0
     public var needsReview = 0
     public var duplicates = 0
+    /// Parmi les doublons : copies identiques rattachées à la fiche existante.
+    public var attached = 0
     public var unsupported = 0
     public var collectionsCreated = 0
     /// Indique si le scan était incomplet ou inaccessible (aucun document n'est alors altéré).
@@ -106,9 +108,6 @@ public struct Ingestor: Sendable {
         }
 
         let rootPath = sourceFolder.standardizedFileURL.path
-        let duplicatePaths: Set<String> = Set(
-            report.duplicateGroups.flatMap { $0.dropFirst().map(\.path) }
-        )
 
         try db.pool.write { dbConn in
             try SourceFolder(path: rootPath).insert(dbConn, onConflict: .ignore)
@@ -222,30 +221,71 @@ public struct Ingestor: Sendable {
                 result.missing += 1
             }
 
-            // 4. Nouveaux fichiers non réassociés : insérés dans le catalogue via l'entonnoir
+            // 4. Nouveaux fichiers non réassociés : insérés dans le catalogue via l'entonnoir.
+            // Une copie identique (même empreinte) à un document déjà catalogué, dans
+            // n'importe quel dossier, ou entré plus haut dans ce scan, rejoint son
+            // édition, signalée « doublon » : jamais une fiche de plus (25/10).
+            var editionByHash: [String: UUID] = [:]
+            for row in try Row.fetchAll(dbConn, sql: """
+                SELECT contentHash, editionId FROM document
+                WHERE contentHash IS NOT NULL AND editionId IS NOT NULL
+                ORDER BY isMissing, dateAdded
+                """) {
+                let hash: String = row["contentHash"]
+                if editionByHash[hash] == nil { editionByHash[hash] = row["editionId"] }
+            }
+            // Entre copies neuves identiques, la moins profonde porte la fiche : la copie
+            // de travail vit d'ordinaire dans un sous-dossier.
             let trulyNewFiles = newFiles.filter { !reassociatedFilePaths.contains($0.path) }
+                .sorted { ($0.path.split(separator: "/").count, $0.path) < ($1.path.split(separator: "/").count, $1.path) }
             for file in trulyNewFiles {
+                if let hash = file.contentHash, let editionId = editionByHash[hash],
+                   let edition = try Edition.fetchOne(dbConn, key: editionId) {
+                    try Document(
+                        editionId: edition.id,
+                        filePath: file.path,
+                        originalFileName: file.fileName,
+                        fileSize: file.fileSize,
+                        contentHash: hash,
+                        format: file.format,
+                        dateAdded: Date(),
+                        needsOCR: false,
+                        isTextExtracted: false,
+                        isMissing: false,
+                        curationStatus: .duplicateCandidate,
+                        confidence: .low
+                    ).insert(dbConn)
+                    result.added += 1
+                    result.duplicates += 1
+                    result.attached += 1
+                    if !file.relativeFolder.isEmpty {
+                        let collection = try Self.findOrCreateCollectionChain(
+                            relativeFolder: file.relativeFolder,
+                            cache: &collectionsByFolder,
+                            created: &result.collectionsCreated,
+                            in: dbConn
+                        )
+                        try CollectionItem(collectionId: collection.id, workId: edition.workId)
+                            .insert(dbConn, onConflict: .ignore)
+                    }
+                    continue
+                }
+
                 let guess = Self.mechanicalGuess(
                     fileName: file.fileName,
                     fileURL: URL(fileURLWithPath: file.path),
                     format: file.format
                 )
 
-                let isDuplicate = duplicatePaths.contains(file.path)
                 let isSolid = guess.confidence == .structured && guess.author != nil
 
                 let status: CurationStatus
                 let confidence: Confidence
-                switch (isDuplicate, isSolid) {
-                case (true, _):
-                    status = .duplicateCandidate
-                    confidence = .low
-                    result.duplicates += 1
-                case (false, true):
+                if isSolid {
                     status = .recognized
                     confidence = .probable
                     result.recognized += 1
-                case (false, false):
+                } else {
                     status = .needsReview
                     confidence = .low
                     result.needsReview += 1
@@ -288,6 +328,7 @@ public struct Ingestor: Sendable {
                 )
                 try document.insert(dbConn)
                 result.added += 1
+                if let hash = file.contentHash { editionByHash[hash] = edition.id }
 
                 if !file.relativeFolder.isEmpty {
                     let collection = try Self.findOrCreateCollectionChain(

@@ -173,7 +173,7 @@ struct Ingest: AsyncParsableCommand {
         print("  déplacés          \(report.relocated)")
         print("  reconnus          \(report.recognized)")
         print("  à identifier      \(report.needsReview)")
-        print("  doublons          \(report.duplicates)")
+        print("  doublons          \(report.duplicates) (rattachés à leur fiche : \(report.attached))")
         print("Collections créées  \(report.collectionsCreated)")
         print("Fichiers non gérés  \(report.unsupported)")
     }

@@ -385,12 +385,20 @@ struct IngestTests {
         #expect(report.recognized == 1)
         #expect(report.needsReview == 1)
         #expect(report.duplicates == 1)
+        #expect(report.attached == 1)
         #expect(report.collectionsCreated == 1)
 
-        // « Kant » apparaît dans le titre de l'œuvre reconnue ET dans le nom du
-        // doublon (« copie de kant ») : la recherche doit trouver les deux.
+        // La copie identique (« copie de kant ») rejoint la fiche de l'original,
+        // moins profond : une seule œuvre, deux documents.
         let byAuthor = try await CatalogSearch(db: db).works(matching: "Kant")
-        #expect(byAuthor.count == 2)
+        #expect(byAuthor.count == 1)
+        let (copie, original) = try await db.pool.read { conn in
+            let docs = try Document.fetchAll(conn)
+            return (docs.first { $0.originalFileName == "copie de kant.pdf" },
+                    docs.first { $0.originalFileName == "Kant_1781_Critique.pdf" })
+        }
+        #expect(copie?.curationStatus == .duplicateCandidate)
+        #expect(copie?.editionId == original?.editionId)
 
         let byTitle = try await CatalogSearch(db: db).works(matching: "Critique")
         #expect(byTitle.count == 1)
@@ -398,6 +406,43 @@ struct IngestTests {
 
         let collections = try await db.pool.read { try BookCollection.fetchAll($0) }
         #expect(collections.map(\.name) == ["Philosophie allemande"])
+    }
+
+    @Test("Une copie de travail identique à un livre d'un autre dossier rejoint sa fiche, jamais une fiche de plus")
+    func copieDeTravail() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("ishtar-copies-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let bibliotheque = base.appendingPathComponent("Bibliothèque")
+        let atelier = base.appendingPathComponent("atelier/sources")
+        try FileManager.default.createDirectory(at: bibliotheque, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: atelier, withIntermediateDirectories: true)
+        let contenu = Data("même contenu".utf8)
+        try contenu.write(to: bibliotheque.appendingPathComponent("Dupont — Essai sur rien (1999).pdf"))
+        try contenu.write(to: atelier.appendingPathComponent("essai.pdf"))
+
+        let db = try CatalogDatabase(inMemory: ())
+        _ = try Ingestor().ingest(report: LibraryScanner().scan(directory: bibliotheque), sourceFolder: bibliotheque, into: db)
+        let avant = try await db.pool.read { (try Work.fetchCount($0), try Edition.fetchAll($0)) }
+
+        let second = try Ingestor().ingest(report: LibraryScanner().scan(directory: base.appendingPathComponent("atelier")),
+                                           sourceFolder: base.appendingPathComponent("atelier"), into: db)
+        #expect(second.added == 1)
+        #expect(second.attached == 1)
+        #expect(second.needsReview == 0)
+        let apres = try await db.pool.read { conn in
+            (try Work.fetchCount(conn), try Edition.fetchCount(conn),
+             try Document.fetchAll(conn).first { $0.originalFileName == "essai.pdf" })
+        }
+        #expect(apres.0 == avant.0)
+        #expect(apres.1 == avant.1.count)
+        #expect(apres.2?.editionId == avant.1.first?.id)
+        #expect(apres.2?.curationStatus == .duplicateCandidate)
+
+        // Ré-ingérer l'atelier ne rattache rien de plus.
+        let troisieme = try Ingestor().ingest(report: LibraryScanner().scan(directory: base.appendingPathComponent("atelier")),
+                                              sourceFolder: base.appendingPathComponent("atelier"), into: db)
+        #expect(troisieme.added == 0)
+        #expect(troisieme.kept == 1)
     }
 
     @Test("Ré-ingérer est idempotent ; les fichiers disparus restent au catalogue sous statut isMissing")
@@ -418,7 +463,7 @@ struct IngestTests {
         #expect(second.removed == 0)
 
         let countAfterSecond = try await db.pool.read { try Work.fetchCount($0) }
-        #expect(countAfterSecond == 3)
+        #expect(countAfterSecond == 2)
 
         // Un fichier disparaît : son document reste au catalogue (isMissing = true), son édition et son œuvre aussi.
         try FileManager.default.removeItem(at: root.appendingPathComponent("Kant_1781_Critique.pdf"))
@@ -430,8 +475,8 @@ struct IngestTests {
         let works = try await db.pool.read { try Work.fetchCount($0) }
         let editions = try await db.pool.read { try Edition.fetchCount($0) }
         let documents = try await db.pool.read { try Document.fetchCount($0) }
-        #expect(works == 3)
-        #expect(editions == 3)
+        #expect(works == 2)
+        #expect(editions == 2)
         #expect(documents == 3)
 
         let missingDoc = try await db.pool.read {

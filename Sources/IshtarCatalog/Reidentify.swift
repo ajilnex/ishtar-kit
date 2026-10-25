@@ -143,11 +143,16 @@ extension CatalogStore {
     /// Le document dont le fichier porte ce nom (dans n'importe quel dossier),
     /// s'il est unique : (document, édition, œuvre).
     public func document(named fileName: String) async throws -> (documentId: UUID, editionId: UUID?, workId: UUID)? {
-        try await db.pool.read { conn in
+        // Les chemins du catalogue viennent du disque, en NFD sous macOS ; le
+        // nom demandé arrive souvent en NFC. On cherche sous les deux formes.
+        let motifs = [fileName.precomposedStringWithCanonicalMapping, fileName.decomposedStringWithCanonicalMapping].map {
+            "%/" + $0.replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
+        }
+        return try await db.pool.read { conn in
             let rows = try Row.fetchAll(conn, sql: """
                 SELECT d.id AS d, d.editionId AS e, ed.workId AS w FROM document d LEFT JOIN edition ed ON ed.id = d.editionId
-                WHERE d.filePath LIKE ? ESCAPE '\\' AND d.isMissing = 0
-                """, arguments: ["%/" + fileName.replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")])
+                WHERE (d.filePath LIKE ? ESCAPE '\\' OR d.filePath LIKE ? ESCAPE '\\') AND d.isMissing = 0
+                """, arguments: StatementArguments(motifs))
             guard rows.count == 1, let w: UUID = rows[0]["w"] else { return nil }
             return (rows[0]["d"], rows[0]["e"], w)
         }
