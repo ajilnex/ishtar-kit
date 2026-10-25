@@ -127,9 +127,11 @@ public struct LibraryScanner: Sendable {
             }
 
             let standardized = fileURL.standardizedFileURL
-            if !ignored.isEmpty, standardized.path.hasPrefix(rootPath + "/"),
-               ignored.contains(String(standardized.path.dropFirst(rootPath.count + 1)).precomposedStringWithCanonicalMapping) {
-                continue
+            if !ignored.isEmpty, standardized.path.hasPrefix(rootPath + "/") {
+                let relative = String(standardized.path.dropFirst(rootPath.count + 1)).precomposedStringWithCanonicalMapping
+                if ignored.contains(relative) || ignored.contains(where: { $0.hasSuffix("/") && relative.hasPrefix($0) }) {
+                    continue
+                }
             }
             let folderPath = standardized.deletingLastPathComponent().path
             let relativeFolder = folderPath.hasPrefix(rootPath)
@@ -176,7 +178,7 @@ public struct LibraryScanner: Sendable {
 
     /// Fichiers que le propriétaire a retirés du catalogue sans les déplacer (papiers
     /// personnels rangés dans `_NON_BIBLIO`, par exemple) : `.ishtar-ignorer` à la racine,
-    /// un chemin relatif par ligne, `#` pour un commentaire. Comparaison en NFC : le nom
+    /// un chemin relatif par ligne (un dossier entier s'il finit par `/`), `#` pour un commentaire. Comparaison en NFC : le nom
     /// sur disque et la ligne écrite peuvent différer de forme.
     static let ignoreFileName = ".ishtar-ignorer"
 

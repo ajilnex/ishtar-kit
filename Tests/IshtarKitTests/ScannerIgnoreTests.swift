@@ -25,6 +25,19 @@ import Testing
         #expect(noms == ["Gardé.txt", "Livre.txt"])
     }
 
+    @Test func dossierEntierIgnore() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ishtar-ignorer-\(UUID().uuidString)")
+        let chantier = root.appendingPathComponent("hkp/Chantier de traduction/chapitres")
+        try FileManager.default.createDirectory(at: chantier, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("hkp/Sources"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("texte".utf8).write(to: chantier.appendingPathComponent("Ch. 1 Traduction.txt"))
+        try Data("texte".utf8).write(to: root.appendingPathComponent("hkp/Sources/Livre.txt"))
+        try "hkp/Chantier de traduction/\n".write(to: root.appendingPathComponent(".ishtar-ignorer"), atomically: true, encoding: .utf8)
+        let noms = LibraryScanner(computeHashes: false).scan(directory: root).files.map(\.fileName)
+        #expect(noms == ["Livre.txt"])
+    }
+
     @Test func sansListeRienNEstIgnore() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ishtar-ignorer-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
