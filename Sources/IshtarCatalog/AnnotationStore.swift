@@ -43,6 +43,14 @@ public struct AnnotationStore: Sendable {
         }
     }
 
+    /// La géométrie remesurée sur le fichier courant (un PDF réenregistré par une
+    /// autre app). Ni la citation ni la date de modification ne changent.
+    public func setGeometry(id: UUID, geometry: String?) async throws {
+        try await db.pool.write { conn in
+            try conn.execute(sql: "UPDATE annotation SET geometry = ? WHERE id = ?", arguments: [geometry, id])
+        }
+    }
+
     public func remove(id: UUID) async throws {
         _ = try await db.pool.write { conn in
             try Annotation.deleteOne(conn, key: id)

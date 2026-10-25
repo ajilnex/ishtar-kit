@@ -167,7 +167,14 @@ public struct AnnotationImport: Sendable {
               created <= modified, modified <= time,
               op.op == "retirer" || modified == time
         else { return result("rejete", "instantané invalide") }
-        let documents = try Document.filter(Column("contentHash") == op.sha256).fetchAll(db)
+        var documents = try Document.filter(Column("contentHash") == op.sha256).fetchAll(db)
+        if documents.isEmpty {
+            // Posée sur le fichier d'avant son enregistrement par une autre app (v13).
+            documents = try Document.fetchAll(db, sql: """
+                SELECT d.* FROM document d JOIN document_former_hash f ON f.documentId = d.id
+                WHERE f.hash = ?
+                """, arguments: [op.sha256])
+        }
         guard !documents.isEmpty else { return result("rejete", "document absent") }
         guard documents.count == 1 else { return result("rejete", "document ambigu") }
         let document = documents[0]

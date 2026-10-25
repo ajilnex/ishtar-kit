@@ -108,6 +108,9 @@ public struct PDFAnnotationImporter: Sendable {
 
     /// Importe dans le catalogue en ignorant ce qui s'y trouve déjà (même
     /// citation, même page). Idempotent. Retourne le nombre réellement ajouté.
+    /// Une annotation déjà importée d'un PDF dont le fichier a changé reçoit la
+    /// géométrie mesurée sur le fichier courant (le lecteur en ligne ne pose une
+    /// géométrie que sur le fichier où elle a été mesurée).
     @discardableResult
     public func importAnnotations(fromPDFAt path: String, documentId: UUID,
                                   into db: CatalogDatabase) async throws -> Int
@@ -119,11 +122,17 @@ public struct PDFAnnotationImporter: Sendable {
         guard !candidates.isEmpty else { return 0 }
 
         let store = AnnotationStore(db: db)
-        var seen = Set(try await store.annotations(documentId: documentId).map { Self.key(page: $0.pageNumber, quote: $0.quote) })
+        let existing = try await store.annotations(documentId: documentId)
+        var seen = Set(existing.map { Self.key(page: $0.pageNumber, quote: $0.quote) })
+        let fromPDF = Dictionary(existing.filter { $0.origin == "pdf" }.map { (Self.key(page: $0.pageNumber, quote: $0.quote), $0) },
+                                 uniquingKeysWith: { first, _ in first })
 
         var added = 0
         for candidate in candidates {
             let key = Self.key(page: candidate.pageNumber, quote: candidate.quote)
+            if let known = fromPDF[key], let geometry = candidate.geometry, known.geometry != geometry {
+                try await store.setGeometry(id: known.id, geometry: geometry)
+            }
             guard !seen.contains(key) else { continue }
             _ = try await store.add(candidate)
             seen.insert(key)

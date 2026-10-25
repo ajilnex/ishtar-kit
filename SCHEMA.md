@@ -347,6 +347,18 @@ les dossiers importés restent des rayonnages. Les identités sont qualifiées
 par fonds côté serveur. Cette version ne crée aucun droit d’écriture partagé.
 Les responsables éditoriaux restent dans `edition_creator`, distincts des auteurs.
 
+## v13 — Anciennes empreintes d’un fichier réécrit à sa place
+
+`document_former_hash` : `hash`, `documentId` (référence `document`, suppression
+en cascade), `dateReplaced` ; clé primaire (`hash`, `documentId`). Quand une autre
+app réenregistre un fichier au même chemin (surlignement dans Aperçu), le scan
+garde la fiche, remplace `contentHash` et inscrit l’ancienne empreinte ici. L’import
+de la file Rayons y retrouve une opération posée sur le fichier d’avant. Suite du
+changement (`ModifiedDocumentFollowUp`) : les annotations du PDF sont importées
+(`origin = pdf`, géométrie remesurée sur le fichier courant) et la vignette
+`<empreinte>.png` est renommée. Une vérification sur pièces ne vaut que pour les
+octets vérifiés : elle ne suit pas la nouvelle empreinte.
+
 ### T-037 lot 2 — import de la file Rayons
 
 `ishtar annotations-importer --db catalogue.sqlite --fonds fiction --ops lot.json

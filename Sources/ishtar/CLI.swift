@@ -165,9 +165,15 @@ struct Ingest: AsyncParsableCommand {
             print("Aucune modification apportée au catalogue.")
             return
         }
+        // Un fichier réécrit par une autre app : ses annotations de PDF entrent,
+        // sa vignette (cache voisin du catalogue) suit l'empreinte.
+        let suite = try await ModifiedDocumentFollowUp.apply(
+            report.modified, db: database,
+            thumbnails: db.deletingLastPathComponent().appendingPathComponent("thumbnails", isDirectory: true))
         print("Documents scannés   \(report.scanned)")
         print("  ajoutés           \(report.added)")
         print("  conservés         \(report.kept)")
+        print("  modifiés          \(report.modified.count) (annotations du PDF importées : \(suite.importedAnnotations))")
         print("  introuvables      \(report.missing)")
         print("  retrouvés         \(report.recovered)")
         print("  déplacés          \(report.relocated)")

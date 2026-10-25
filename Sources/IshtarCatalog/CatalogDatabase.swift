@@ -386,6 +386,18 @@ public final class CatalogDatabase: Sendable {
                 t.column("preferred", .boolean).notNull().defaults(to: false)
             }
         }
+
+        // Un fichier réécrit à sa place (surligné dans Aperçu) change d'empreinte :
+        // l'ancienne reste rattachée à la fiche, pour ce qui la cite encore au dehors.
+        migrator.registerMigration("v13_empreintes_anciennes") { db in
+            try db.create(table: "document_former_hash") { t in
+                t.column("hash", .text).notNull()
+                t.column("documentId", .text).notNull().references("document", onDelete: .cascade)
+                t.column("dateReplaced", .datetime).notNull()
+                t.primaryKey(["hash", "documentId"])
+            }
+            try db.create(index: "document_former_hash_on_hash", on: "document_former_hash", columns: ["hash"])
+        }
         return migrator
     }
 }

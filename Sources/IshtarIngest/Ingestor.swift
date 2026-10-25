@@ -26,11 +26,33 @@ public struct IngestReport: Sendable, Equatable {
     public var attached = 0
     public var unsupported = 0
     public var collectionsCreated = 0
+    /// Documents réécrits à leur place par une autre app (surlignés dans Aperçu…) :
+    /// même fiche, nouvelle empreinte. À suivre par `ModifiedDocumentFollowUp`.
+    public var modified: [ModifiedDocument] = []
     /// Indique si le scan était incomplet ou inaccessible (aucun document n'est alors altéré).
     public var isScanIncomplete = false
     public var scanErrorMessage: String? = nil
 
     public init() {}
+}
+
+/// Un document dont le fichier a changé au même chemin. L'ancienne empreinte
+/// reste connue du catalogue (`document_former_hash`) : ce qui y était rattaché
+/// hors d'Ishtar (file de Rayons, vignettes) la retrouve.
+public struct ModifiedDocument: Sendable, Equatable {
+    public var documentId: UUID
+    public var path: String
+    public var format: DocumentFormat
+    public var formerHash: String?
+    public var contentHash: String?
+
+    public init(documentId: UUID, path: String, format: DocumentFormat, formerHash: String?, contentHash: String?) {
+        self.documentId = documentId
+        self.path = path
+        self.format = format
+        self.formerHash = formerHash
+        self.contentHash = contentHash
+    }
 }
 
 /// Transforme un rapport de scan en enregistrements du catalogue.
@@ -128,15 +150,9 @@ public struct Ingestor: Sendable {
             for path in continuingPaths {
                 var doc = existingDocsByPath[path]!
                 let file = scannedFilesByPath[path]!
-                let changed = file.contentHash.map { $0 != doc.contentHash } ?? (file.fileSize != doc.fileSize)
-                if changed {
-                    // L’identité et la curation restent ; le texte sera remplacé
-                    // uniquement après une nouvelle extraction réussie.
-                    doc.contentHash = file.contentHash ?? doc.contentHash
-                    doc.fileSize = file.fileSize
-                    doc.format = file.format
-                    doc.isTextExtracted = false
-                }
+                let changed = try Self.recordContentChange(
+                    &doc, hash: file.contentHash, size: file.fileSize, format: file.format,
+                    in: dbConn, report: &result)
                 if doc.isMissing {
                     // Document introuvable redevenu accessible au même endroit
                     doc.isMissing = false
@@ -408,4 +424,56 @@ public struct Ingestor: Sendable {
         }
         return leaf
     }
+
+    // MARK: Fichier réécrit à sa place
+
+    /// Rescan ciblé des fichiers qu'une autre app vient d'enregistrer : seuls ces
+    /// chemins sont relus (empreinte, taille), sans parcourir la bibliothèque.
+    /// Un chemin inconnu du catalogue, introuvable ou illisible est laissé au scan complet.
+    public func refreshModified(paths: [String], into db: CatalogDatabase) throws -> IngestReport {
+        var result = IngestReport()
+        for path in Set(paths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }).sorted() {
+            let url = URL(fileURLWithPath: path)
+            guard let format = FormatDetector.resolve(fileURL: url),
+                  let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+                  let hash = LibraryScanner.sha256(of: url)
+            else { continue }
+            try db.pool.write { conn in
+                guard var doc = try Document.filter(Column("filePath") == path).fetchOne(conn),
+                      !doc.isMissing
+                else { return }
+                result.scanned += 1
+                if try Self.recordContentChange(&doc, hash: hash, size: Int64(size), format: format,
+                                                in: conn, report: &result) {
+                    try doc.update(conn)
+                } else {
+                    result.kept += 1
+                }
+            }
+        }
+        return result
+    }
+
+    /// Le seul chemin d'un changement de contenu au même emplacement (scan complet
+    /// ou ciblé) : l'identité et la curation restent ; le texte sera remplacé
+    /// uniquement après une nouvelle extraction réussie ; l'ancienne empreinte est gardée.
+    static func recordContentChange(_ doc: inout Document, hash: String?, size: Int64, format: DocumentFormat,
+                                    in conn: Database, report: inout IngestReport) throws -> Bool {
+        let changed = hash.map { $0 != doc.contentHash } ?? (size != doc.fileSize)
+        guard changed else { return false }
+        let former = doc.contentHash
+        doc.contentHash = hash ?? doc.contentHash
+        doc.fileSize = size
+        doc.format = format
+        doc.isTextExtracted = false
+        if let former, !former.isEmpty, former != doc.contentHash {
+            try conn.execute(sql: """
+                INSERT OR IGNORE INTO document_former_hash (hash, documentId, dateReplaced) VALUES (?, ?, ?)
+                """, arguments: [former, doc.id, Date()])
+        }
+        report.modified.append(ModifiedDocument(documentId: doc.id, path: doc.filePath, format: doc.format,
+                                                formerHash: former, contentHash: doc.contentHash))
+        return true
+    }
+
 }
