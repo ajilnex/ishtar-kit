@@ -191,7 +191,7 @@ public struct AnnotationImport: Sendable {
                   AnnotationGeometry(json: stored) == geometry
             else { return result("rejete", "géométrie étrangère") }
         }
-        let readerColor = s.couleur == nil || ["klein", "redon"].contains(s.couleur!)
+        let readerColor = s.couleur == nil || ["klein", "redon", "acide"].contains(s.couleur!)
         let legacyColor = s.couleur?.range(of: #"^[a-z]{1,16}$"#, options: .regularExpression) != nil
         guard readerColor || (legacyColor && op.op != "poser" && existing != nil && s.couleur == existing?.color)
         else { return result("rejete", "couleur non prise en charge") }

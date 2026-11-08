@@ -194,6 +194,18 @@ struct AnnotationImportTests {
         #expect(try await copy.pool.read { try String.fetchOne($0, sql: "PRAGMA quick_check") } == "ok")
     }
 
+    @Test("Les trois couleurs du surlignement du lecteur s'importent")
+    func couleursDuLecteur() async throws {
+        let (db, _) = try await fixture()
+        for (n, couleur) in ["klein", "redon", "acide"].enumerated() {
+            var pose = operation(seq: Int64(n + 1))
+            pose.instantane.sorte = "surlignement"
+            pose.instantane.couleur = couleur
+            #expect(try await run([pose], db: db).appliquees == 1)
+        }
+        #expect(try await Set(annotations(db).compactMap(\.color)) == ["klein", "redon", "acide"])
+    }
+
     @Test("Couleur PDF historique conservée en modification ; retrait PDF refusé et date future non décroissante")
     func historiquePDF() async throws {
         let (db, doc) = try await fixture()
