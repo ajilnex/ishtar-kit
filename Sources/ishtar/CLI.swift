@@ -959,6 +959,22 @@ struct Verifier: AsyncParsableCommand {
             let n = try await ContentCheck.merge(twins, in: database)
             print("\(n) éditions réunies à leur jumelle.")
         }
+        // Une édition dont la clé est stable (publiée, peut-être citée) n'est
+        // jamais absorbée ici : sa clé doit devenir une pierre. On dit le geste.
+        let jumeaux = twins
+        let stables = try await database.pool.read { conn in
+            try jumeaux.flatMap { t in
+                try t.editionIds.indices.filter { $0 != t.best && t.editionIds[$0] != t.editionIds[t.best] }.compactMap { i -> String? in
+                    guard let absorbee = try EditionKey.fetchOne(conn, key: t.editionIds[i]), absorbee.origin != .generated,
+                          let gardee = try EditionKey.fetchOne(conn, key: t.editionIds[t.best]) else { return nil }
+                    return "ishtar fusionner --db … --cle \(absorbee.key) --dans \(gardee.key) --preuve \"…\" --appliquer"
+                }
+            }
+        }
+        if !stables.isEmpty {
+            print("Clés stables : ces jumeaux se réunissent par une fusion, qui garde l'ancienne clé en pierre :")
+            for ligne in Set(stables).sorted() { print("  " + ligne) }
+        }
     }
 }
 

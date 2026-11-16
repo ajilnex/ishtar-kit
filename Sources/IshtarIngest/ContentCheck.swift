@@ -59,6 +59,7 @@ public enum ContentCheck {
                        COALESCE(NULLIF(e.title, ''), w.title) AS title, w.confidence AS confidence,
                        (SELECT c.name FROM work_creator wc JOIN creator c ON c.id = wc.creatorId
                          WHERE wc.workId = w.id AND wc.role = 'author' ORDER BY wc.position LIMIT 1) AS author,
+                       d.format AS format, d.dateAdded AS dateAdded,
                        (SELECT count(*) FROM document_page p WHERE p.documentId = d.id) AS pages,
                        (SELECT group_concat(content, ' ') FROM (SELECT content FROM document_page p
                           WHERE p.documentId = d.id AND p.pageNumber BETWEEN \(openingPages.lowerBound) AND \(openingPages.upperBound)
@@ -71,16 +72,24 @@ public enum ContentCheck {
         }
         var findings: [ContentFinding] = []
         var twinsByOpening: [String: [Row]] = [:]
+        // Les PDF que le texte ne peut pas départager (scans sans texte) : on
+        // les compare par leurs pages (`ImageTwins`).
+        var silent: [Row] = []
         for row in rows {
-            guard let opening: String = row["opening"], opening.count >= 200 else { continue }
             let pages: Int = row["pages"]
             // Jumeaux : même nombre de pages et même texte des pages 5 à 12 (les
             // toutes premières sont souvent des pages d'éditeur communes à une
             // collection, ou vides).
+            var compared = false
             if let body: String = row["body"] {
                 let skeleton = TypographyRestorer.skeleton(body)
-                if skeleton.count >= 600 { twinsByOpening["\(pages)|" + String(skeleton.prefix(1500)), default: []].append(row) }
+                if skeleton.count >= 600 {
+                    twinsByOpening["\(pages)|" + String(skeleton.prefix(1500)), default: []].append(row)
+                    compared = true
+                }
             }
+            if !compared, (row["format"] as String).lowercased() == "pdf" { silent.append(row) }
+            guard let opening: String = row["opening"], opening.count >= 200 else { continue }
 
             guard (row["confidence"] as String) != "high" else { continue }
             let title: String = row["title"]
@@ -102,14 +111,20 @@ public enum ContentCheck {
                 findings.append(make(.foreign))
             }
         }
-        let twins = twinsByOpening.values.filter { Set($0.map { $0["editionId"] as UUID }).count > 1 }.map { rows in
+        let silentGroups = ImageTwins.find(among: silent.indices.map { (id: $0, url: URL(fileURLWithPath: silent[$0]["path"])) })
+            .map { $0.map { silent[$0] } }
+        let twins = (Array(twinsByOpening.values) + silentGroups).filter { Set($0.map { $0["editionId"] as UUID }).count > 1 }.map { rows in
             let scores = rows.map { row -> Double in
                 let opening: String = row["opening"] ?? ""
                 let family = Reidentification.family(row["author"] as String?)
                 let found = family.count >= 3 && TypographyRestorer.skeleton(opening).contains(family)
                 return ((row["confidence"] as String) == "high" ? 10 : 0) + (found ? 1 : 0) + coverage(title: row["title"], in: opening)
             }
-            let best = scores.indices.max { scores[$0] < scores[$1] } ?? 0
+            // À score égal (deux scans sans texte), la fiche entrée la dernière :
+            // elle a passé les contrôles les plus récents.
+            let best = scores.indices.max {
+                (scores[$0], (rows[$0]["dateAdded"] as String?) ?? "") < (scores[$1], (rows[$1]["dateAdded"] as String?) ?? "")
+            } ?? 0
             return ContentTwins(documentIds: rows.map { $0["documentId"] }, editionIds: rows.map { $0["editionId"] },
                                 titles: rows.map { $0["title"] }, paths: rows.map { $0["path"] }, best: best)
         }

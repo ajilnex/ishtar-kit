@@ -18,6 +18,7 @@
 1. Le scan et l'ingestion ne touchent jamais le réseau ni l'IA.
 2. Le dossier de l'utilisateur n'est jamais modifié, sauf par `ranger`, `doublons` et `corriger` (`--appliquer`, journal pour défaire).
 3. Une copie identique (même empreinte) à un document déjà catalogué rejoint son édition, marquée doublon : l'ingestion ne crée jamais une seconde fiche pour un même contenu.
+   Deux fichiers différents du même livre (jumeaux) se cherchent par `verifier` : par le texte des pages 5 à 12, ou, pour un PDF sans texte, par ses pages (`ImageTwins` : même nombre de pages, même profil d'encre sur quarante pages témoins, mêmes vignettes ; la taille des pages ne compte pas). `verifier --appliquer` réunit les fiches à clé provisoire ; pour une clé stable, il indique la fusion à lancer (`fusionner`, qui garde l'ancienne clé en pierre).
 4. Toute proposition d'identification est *proposée*, jamais imposée.
 5. Le schéma SQLite est un format d'échange documenté ([SCHEMA.md](SCHEMA.md)).
 
